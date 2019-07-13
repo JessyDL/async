@@ -1,0 +1,5 @@
+SET(INC 
+stdafx_async.h
+)
+
+list(TRANSFORM INC PREPEND inc/)

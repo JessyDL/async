@@ -1,0 +1,6 @@
+.vs/
+builds/
+tools/cache/
+tests/common/build/
+docker/cache/
+project_files/
