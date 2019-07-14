@@ -50,13 +50,14 @@ int main()
 		});
 
 
-	auto t1 = then(new_thread(), []() { return true; });
-	auto t2 = then(new_thread(), []() { return 10; });
-	auto t3 = into(t1, t2, [](bool truth, int value) { return (truth) ? 100 : 2; });
+	auto t1 = ([]() { return true; });
+	auto t2 = then([]() { return 10; }, [](int previous) { return previous + 10; });
+	auto t3 = into(t1, t2, [](bool truth, int value) 
+		{ return (truth) ? 100 : 2; });
 
 
 	auto t4 = parallel_n(t1, 2);
-	auto t5 = parallel(then(new_thread(), []() { return 30; }), t2, t2);
+	auto t5 = parallel([]() { return 30; }, t2, t2);
 	auto t6 = into(t5, [](std::vector<std::future<int>> values) 
 		{ 
 			int sum = 0;
@@ -72,9 +73,13 @@ int main()
 
 	//auto tuple = std::tuple{ compute<execution::wait>(t1), compute<execution::wait>(t2)};
 
+	auto a = compute<execution::async>([]()
+		{ return true; });
 	auto x = compute<execution::wait>(t3);
 
 	auto y = compute<execution::async>(t6);
 
-		return 0;
+	auto resa = a.get();
+	auto resy = y.get();
+	return 0;
 }

@@ -81,10 +81,10 @@ namespace ASYNC_NAMESPACE
 
 			typedef R result_type;
 
-			template <size_t i>
+			template <size_t I>
 			struct arg
 			{
-				typedef typename std::tuple_element<i, std::tuple<Args...>>::type type;
+				typedef typename std::tuple_element<I, std::tuple<Args...>>::type type;
 			};
 		};
 
@@ -105,20 +105,31 @@ namespace ASYNC_NAMESPACE
 		template<typename... Ts>
 		struct is_variant<std::variant<Ts...>> : std::true_type {};
 
+		template<typename Fn>
+		auto wrap(Fn&& fn)
+		{
+			if constexpr (std::is_invocable<Fn>::value)
+			{
+				return then([](auto p) { p.set_value(); }, std::forward<Fn>(fn));
+			}
+			else
+			{
+				return fn;
+			}
+		}
 
+		template<typename... Fn>
+		auto wrap_all(Fn&&... fn)
+		{
+			return std::make_tuple(wrap(std::forward<Fn>(fn))...);
+		}
 	}
-
-	struct invocation_index
-	{
-		operator size_t() const noexcept { return index; };
-		size_t index{};
-	};
 
 
 	template<typename FN1, typename FN2>
 	auto then(FN1&& task1, FN2&& task2)
 	{
-		return[task1 = std::forward<FN1>(task1), task2 = std::forward<FN2>(task2)](auto p)
+		return[task1 = details::wrap(std::forward<FN1>(task1)), task2 = std::forward<FN2>(task2)](auto p)
 		{
 			using param_t = decltype(p);
 
@@ -155,7 +166,7 @@ namespace ASYNC_NAMESPACE
 		{
 			return then([tasks = std::forward_as_tuple(tasks...)](auto p)
 			{
-				std::apply([&](auto&&... args) 
+				std::apply([&](auto&& ... args)
 					{
 						p.set_value(compute<execution::wait>(args)...);
 					}, std::move(tasks));
@@ -174,7 +185,7 @@ namespace ASYNC_NAMESPACE
 	}
 
 	template<typename... FNn>
-	auto into(FNn&&... tasks)
+	auto into(FNn&& ... tasks)
 	{
 		auto task2 = std::get<sizeof...(FNn) - 1 >(std::tie(tasks...));
 		auto subtuple = details::subtuple_(std::forward_as_tuple(tasks...), std::make_index_sequence<sizeof...(FNn) - 1>());
@@ -184,13 +195,13 @@ namespace ASYNC_NAMESPACE
 				{
 					p.set_value(compute<execution::wait>(args)...);
 				}, std::move(tasks));
-		}, std::forward<decltype(task2 )>(task2));
+		}, std::forward<decltype(task2)>(task2));
 	}
 
 	template<typename FN>
 	auto parallel_n(FN&& task, size_t count = 0)
 	{
-		return [task = std::forward<FN>(task), count](auto p)
+		return[task = details::wrap(std::forward<FN>(task)), count](auto p)
 		{
 			using result_t = typename decltype(std::declval<FN>()(std::declval<void*>()))::type;
 
@@ -214,9 +225,10 @@ namespace ASYNC_NAMESPACE
 	auto parallel(FN&& ... tasks)
 	{
 		static_assert(sizeof...(FN) > 1);
-		return[tasks = std::forward_as_tuple(tasks...)](auto p)
+		
+		return[tasks = details::wrap_all(std::forward<FN>(tasks)...)](auto p)
 		{
-			using result_t = typename decltype(std::declval<decltype(std::get<0>(std::declval<std::tuple<FN...>>()))>()(std::declval<void*>()))::type;
+			using result_t = typename decltype(std::declval<decltype(std::get<0>(std::declval<decltype(tasks )>()))>()(std::declval<void*>()))::type;
 
 			if constexpr (std::is_same<decltype(p), void*>::value)
 			{
@@ -234,7 +246,7 @@ namespace ASYNC_NAMESPACE
 				if constexpr (details::is_variant<decltype(p)>::value)
 				{
 					std::visit([&](auto&& value) {
-						value.set_value(std::move(futures));}, p);
+						value.set_value(std::move(futures)); }, p);
 				}
 				else
 				{
@@ -244,36 +256,106 @@ namespace ASYNC_NAMESPACE
 		};
 	}
 
-	template<execution ex = execution::async, typename Task, typename T = typename decltype(std::declval<Task>()(std::declval<void*>()))::type>
+	template<execution ex = execution::async, typename Task>
 	auto compute(Task && task)
 	{
-		if constexpr (ex == execution::async)
+		// we are dealing with a task lambda
+		if constexpr (!std::is_invocable<Task, void*>::value)
 		{
-			details::state_object<T> state;
-
-			std::promise<T> promise;
-			auto future = promise.get_future();
-			task(std::move(promise));
-			return future;
+			return compute<ex>(details::wrap(task));
 		}
 		else
 		{
-			details::state_object<T> state;
-
-			task(details::promise_variant<T>{details::promise<T>{&state}});
-
+			using T = typename decltype(std::declval<Task>()(std::declval<void*>()))::type;
+			if constexpr (ex == execution::async)
 			{
-				auto lock = std::unique_lock{ state.mutex };
-				state.condition_variable.wait(lock, [&state]()
-					{return state.data.index() != 0; });
+				details::state_object<T> state;
+
+				std::promise<T> promise;
+				auto future = promise.get_future();
+
+				std::thread t
+				{
+					[task = std::forward<Task>(task)] (std::promise<T> promise) mutable
+					{
+						task(std::move(promise));
+					}, std::move(promise)
+				};
+				t.detach();
+
+				return future;
 			}
+			else
+			{
+				details::state_object<T> state;
 
-			if (state.data.index() == 1)
-				std::rethrow_exception(std::get<1>(state.data));
+				task(details::promise_variant<T>{details::promise<T>{&state}});
 
-			return std::move(std::get<2>(state.data));
+				{
+					auto lock = std::unique_lock{ state.mutex };
+					state.condition_variable.wait(lock, [&state]()
+						{return state.data.index() != 0; });
+				}
+
+				if (state.data.index() == 1)
+					std::rethrow_exception(std::get<1>(state.data));
+
+				return std::move(std::get<2>(state.data));
+			}
 		}
 	}
+
+	/*
+	template<execution ex = execution::async, typename Task>
+	auto compute(Task&& task)
+	{
+		if constexpr (std::is_invocable<Task, void>::value)
+		{
+			using T = decltype(std::declval<Task>()());
+			if constexpr (ex == execution::async)
+			{
+				details::state_object<T> state;
+				std::promise<T> promise;
+				promise = std::move(task());
+				return promise.get_future();
+			}
+			else
+			{
+				return task();
+			}
+		}
+		else
+		{
+			using T = decltype(std::declval<Task>()(std::declval<void*>()));
+			if constexpr (ex == execution::async)
+			{
+				details::state_object<T> state;
+
+				std::promise<T> promise;
+				auto future = promise.get_future();
+				task(std::move(promise));
+				return future;
+			}
+			else
+			{
+				details::state_object<T> state;
+
+				task(details::promise_variant<T>{details::promise<T>{&state}});
+
+				{
+					auto lock = std::unique_lock{ state.mutex };
+					state.condition_variable.wait(lock, [&state]()
+						{return state.data.index() != 0; });
+				}
+
+				if (state.data.index() == 1)
+					std::rethrow_exception(std::get<1>(state.data));
+
+				return std::move(std::get<2>(state.data));
+			}
+		}
+	}
+	*/
 
 	struct sink
 	{
