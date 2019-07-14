@@ -10,7 +10,7 @@ add_executable(${PROJECT_TESTS} ${SRC} ${INC} ${NATVIS})
 
 target_include_directories(${PROJECT_TESTS}
 	PUBLIC 
-      ${CMAKE_CURRENT_SOURCE_DIR}/tests/inc
+      ${CMAKE_CURRENT_SOURCE_DIR}/inc
 )
 
 target_link_libraries(${PROJECT_TESTS} PUBLIC ${PROJECT})

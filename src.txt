@@ -1,4 +1,5 @@
 SET(SRC 
+main.cpp
 )
 
 list(TRANSFORM SRC PREPEND src/)
