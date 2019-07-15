@@ -47,11 +47,40 @@ namespace ASYNC_NAMESPACE
 			void set_exception(Y&& e) { set<1>(std::forward<Y>(e)); }
 		};
 
+		struct task_tag_type {};
+
+		struct scheduler
+		{
+			~scheduler()
+			{
+				for (auto& thread : m_Workers)
+					thread.join();
+			}
+			template<typename T>
+			void start_work(T& p)
+			{
+				m_Workers.emplace_back(
+					[&]() mutable
+					{
+						p.set_value();
+					}
+				);
+			}
+
+			std::vector<std::thread> m_Workers;
+		};
+
 		template<typename param_t, typename fn_t>
 		struct promise_wrapper
 		{
 			param_t param;
 			fn_t func;
+			details::scheduler* scheduler;
+
+			void spawn()
+			{
+				scheduler->start_work(*this);
+			}
 
 			template<typename... Args>
 			auto set_value(Args&& ... args)
@@ -105,12 +134,16 @@ namespace ASYNC_NAMESPACE
 		template<typename... Ts>
 		struct is_variant<std::variant<Ts...>> : std::true_type {};
 
+
 		template<typename Fn>
 		auto wrap(Fn&& fn)
 		{
 			if constexpr (std::is_invocable<Fn>::value)
 			{
-				return then([](auto p) { p.set_value(); }, std::forward<Fn>(fn));
+				return then([](auto p)
+					{
+						p.spawn();
+					}, std::forward<Fn>(fn));
 			}
 			else
 			{
@@ -119,34 +152,49 @@ namespace ASYNC_NAMESPACE
 		}
 
 		template<typename... Fn>
-		auto wrap_all(Fn&&... fn)
+		auto wrap_all(Fn&& ... fn)
 		{
 			return std::make_tuple(wrap(std::forward<Fn>(fn))...);
 		}
+
+		template<typename Fn>
+		struct is_packaged_task	: public std::is_invocable<Fn, details::task_tag_type, details::scheduler*>
+		{
+		};
 	}
 
 
 	template<typename FN1, typename FN2>
 	auto then(FN1&& task1, FN2&& task2)
 	{
-		return[task1 = details::wrap(std::forward<FN1>(task1)), task2 = std::forward<FN2>(task2)](auto p)
+		return[task1 = details::wrap(std::forward<FN1>(task1)), task2 = std::forward<FN2>(task2)](auto p, details::scheduler* scheduler = nullptr)
 		{
 			using param_t = decltype(p);
+			using func_t = details::function_traits<decltype(std::function{ std::declval<FN2>() }) > ;
 
-			if constexpr (std::is_same<param_t, void*>::value)
+			if constexpr (std::is_same<param_t, details::task_tag_type>::value)
 			{
-				return details::type_wrapper<typename details::function_traits<decltype(std::function{ std::declval<FN2>() }) > ::result_type > {};
+				return details::type_wrapper<typename func_t::result_type> {};
 			}
 			else
 			{
 				if constexpr (details::is_variant<decltype(p)>::value)
 				{
-					std::visit([&](auto&& value) {
-						std::invoke(task1, details::promise_wrapper<decltype(value), decltype(task2)>{std::forward<decltype(value)>(value), task2}); }, p);
+					std::visit([&](auto&& value)
+						{
+							std::invoke(task1, details::promise_wrapper<decltype(value), decltype(task2)>{std::forward<decltype(value)>(value), task2, scheduler}, scheduler);
+						}, p);
 				}
 				else
 				{
-					std::invoke(task1, details::promise_wrapper<param_t, decltype(task2)>{std::forward<param_t>(p), task2});
+					if constexpr (details::is_packaged_task<decltype(task1)>::value)
+					{
+						std::invoke(task1, details::promise_wrapper<param_t, decltype(task2)>{std::forward<param_t>(p), task2, scheduler}, scheduler);
+					}
+					else
+					{
+						std::invoke(task1, details::promise_wrapper<param_t, decltype(task2)>{std::forward<param_t>(p), task2, scheduler});
+					}
 				}
 			}
 		};
@@ -201,11 +249,11 @@ namespace ASYNC_NAMESPACE
 	template<typename FN>
 	auto parallel_n(FN&& task, size_t count = 0)
 	{
-		return[task = details::wrap(std::forward<FN>(task)), count](auto p)
+		return[task = details::wrap(std::forward<FN>(task)), count](auto p, details::scheduler* scheduler = nullptr)
 		{
-			using result_t = typename decltype(std::declval<FN>()(std::declval<void*>()))::type;
+			using result_t = typename decltype(std::declval<FN>()(std::declval<details::task_tag_type>()))::type;
 
-			if constexpr (std::is_same<decltype(p), void*>::value)
+			if constexpr (std::is_same<decltype(p), details::task_tag_type>::value)
 			{
 				return details::type_wrapper<std::vector<std::future<result_t>>>{};
 			}
@@ -225,12 +273,12 @@ namespace ASYNC_NAMESPACE
 	auto parallel(FN&& ... tasks)
 	{
 		static_assert(sizeof...(FN) > 1);
-		
-		return[tasks = details::wrap_all(std::forward<FN>(tasks)...)](auto p)
-		{
-			using result_t = typename decltype(std::declval<decltype(std::get<0>(std::declval<decltype(tasks )>()))>()(std::declval<void*>()))::type;
 
-			if constexpr (std::is_same<decltype(p), void*>::value)
+		return[tasks = details::wrap_all(std::forward<FN>(tasks)...)](auto p, details::scheduler* scheduler = nullptr)
+		{
+			using result_t = typename decltype(std::declval<decltype(std::get<0>(std::declval<decltype(tasks)>()))>()(std::declval<details::task_tag_type>()))::type;
+
+			if constexpr (std::is_same<decltype(p), details::task_tag_type>::value)
 			{
 				return details::type_wrapper<std::vector<std::future<result_t>>>{};
 			}
@@ -257,39 +305,31 @@ namespace ASYNC_NAMESPACE
 	}
 
 	template<execution ex = execution::async, typename Task>
-	auto compute(Task && task)
+	auto compute(Task&& task)
 	{
 		// we are dealing with a task lambda
-		if constexpr (!std::is_invocable<Task, void*>::value)
+		if constexpr (!details::is_packaged_task<Task>::value)
 		{
 			return compute<ex>(details::wrap(task));
 		}
 		else
 		{
-			using T = typename decltype(std::declval<Task>()(std::declval<void*>()))::type;
+			using T = typename decltype(std::declval<Task>()(std::declval<details::task_tag_type>()))::type;
+			details::state_object<T> state;
 			if constexpr (ex == execution::async)
 			{
-				details::state_object<T> state;
-
-				std::promise<T> promise;
-				auto future = promise.get_future();
-
-				std::thread t
-				{
-					[task = std::forward<Task>(task)] (std::promise<T> promise) mutable
+				return std::async(
+					[task = std::forward<Task>(task)]() mutable
 					{
-						task(std::move(promise));
-					}, std::move(promise)
-				};
-				t.detach();
-
-				return future;
+						return compute<execution::wait>(std::forward<Task>(task));
+					}
+					);
 			}
 			else
 			{
-				details::state_object<T> state;
+				details::scheduler scheduler{};
 
-				task(details::promise_variant<T>{details::promise<T>{&state}});
+				task(details::promise_variant<T>{details::promise<T>{&state}}, & scheduler);
 
 				{
 					auto lock = std::unique_lock{ state.mutex };
