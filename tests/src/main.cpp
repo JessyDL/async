@@ -1,72 +1,90 @@
 #include "algorithm.h"
 #include <iostream>
+#include <cassert>
+#include <numeric>
+using namespace ASYNC_NAMESPACE;
 
-
-void simple_test1()
+void test_then1()
 {
-	using namespace ASYNC_NAMESPACE;
-	auto task = then([]() {return true; }, [](bool value) { return 0; });
-	auto result = compute<execution::async>(task);
-	auto actual = result.get();
+	auto task = then([]() {return true; }, [](bool value) { return 5; });
+	auto result = compute<execution::wait>(task);
+	assert(result == 5);
 }
 
-void simple_test2()
+void test_then2()
 {
-	using namespace ASYNC_NAMESPACE;
+	auto task = then([]() {return true; }, [](bool value) { return 5; });
+	auto future = compute<execution::async>(task);
+	auto result = future.get();
+	assert(result == 5);
+}
+
+void test_then3()
+{
 	auto task = then([]() {return true; }, [](bool value) { return 0; }, [](int value) { return 10; });
-	auto result = compute<execution::async>(task);;
-	auto actual = result.get();
+	auto result = compute<execution::wait>(task);;
+	assert(result == 10);
 }
 
+void test_then4()
+{
+	auto task = then([]() {return true; }, [](bool value) { return 0; }, [](int value) { return 10; });
+	auto future = compute<execution::async>(task);
+	auto result = future.get();
+	assert(result == 10);
+}
+
+void test_into1()
+{
+	auto task = into(
+		[]() 
+		{ return true; },
+		[]() 
+		{return 5; }, 
+		[]() 
+		{ return 10; }, 
+		[](bool test, int val1, int val2) 
+		{return (test) ? val1 : val2; });
+	auto result = compute<execution::wait>(task);
+	assert(result == 5);
+}
+
+void test_into2()
+{
+	auto task = into([]() { return true; }, []() {return 5; }, []() { return 10; }, [](bool test, int val1, int val2) {return (test) ? val1 : val2; });
+	auto future = compute<execution::async>(task);
+	auto result = future.get();
+	assert(result == 5);
+}
+
+void test_parallel1()
+{
+	auto task = into(parallel([]() { return 30; }, []() { return 10; }, []() { return 20; }), 		
+		[](std::vector<int> futures) 
+		{
+			return std::accumulate(std::begin(futures), std::end(futures), 0, [](int sum, int f) { return f + sum; }); 
+		});
+	auto result = compute<execution::wait>(task);
+	assert(result == 60);
+}
+
+void test_parallel2()
+{
+	auto task = into(parallel([]() { return 30; }, []() { return 10; }, []() { return 20; }), [](std::vector<int> futures) {return std::accumulate(std::begin(futures), std::end(futures), 0, [](int sum, int f) { return f + sum; }); });
+	auto future = compute<execution::async>(task);
+	auto result = future.get();
+	assert(result == 60);
+
+}
 int main()
 {
-	using namespace ASYNC_NAMESPACE;
-	//auto task = then([]()
-	//	{
-	//		return 42;
-	//	}, [](int value) -> int
-	//	{
-	//		printf("%d\n", value);
-	//		return 0;
-	//	},
-	//		[](int x)
-	//	{
-	//		return 42;
-	//	});
-
-
-	//auto t1 = ([]() { return true; });
-	//auto t2 = then([]() { return 10; }, [](int previous) { return previous + 10; });
-	//auto t3 = into(t1, t2, [](bool truth, int value) 
-	//	{ return (truth) ? 100 : 2; });
-
-
-	//auto t4 = parallel_n(t1, 2);
-	//auto t5 = parallel([]() { return 30; }, t2, t2);
-	//auto t6 = into(t5, [](std::vector<std::future<int>> values) 
-	//	{ 
-	//		int sum = 0;
-	//		for (auto& future : values)
-	//		{
-	//			sum += future.get();
-	//		}
-	//		return sum;
-	//	});
-	////auto t3 = details::into_impl([](bool truth, int value) { return (truth) ? 100 : 2; }, t1, t2);
-
-	////token >> token1 >> parallel(8, token2) >> print_token;
-
-	////auto tuple = std::tuple{ compute<execution::wait>(t1), compute<execution::wait>(t2)};
-
-	//auto a = compute<execution::async>([]()
-	//	{ return true; });
-	//auto x = compute<execution::wait>(t3);
-
-	//auto y = compute<execution::async>(t6);
-
-	//auto resa = a.get();
-	//auto resy = y.get();
-	simple_test1();
-	simple_test2();
+	test_then1();
+	test_then2();
+	test_then3();
+	test_then4();
+	test_into1();
+	test_into2();
+	test_parallel1();
+	test_parallel2();
 	return 0;
 }

@@ -59,14 +59,22 @@ namespace ASYNC_NAMESPACE
 			template<typename T>
 			void start_work(T& p)
 			{
-				m_Workers.emplace_back(
-					[&]() mutable
-					{
-						p.set_value();
-					}
-				);
+				if (m_Execution == execution::wait)
+				{
+					p.set_value();
+				}
+				else
+				{
+					m_Workers.emplace_back(
+						[=]() mutable
+						{
+							p.set_value();
+						}
+					);
+				}
 			}
 
+			execution m_Execution;
 			std::vector<std::thread> m_Workers;
 		};
 
@@ -180,10 +188,20 @@ namespace ASYNC_NAMESPACE
 			{
 				if constexpr (details::is_variant<decltype(p)>::value)
 				{
-					std::visit([&](auto&& value)
-						{
-							std::invoke(task1, details::promise_wrapper<decltype(value), decltype(task2)>{std::forward<decltype(value)>(value), task2, scheduler}, scheduler);
-						}, p);
+					if constexpr (details::is_packaged_task<decltype(task1)>::value)
+					{
+						std::visit([&](auto&& value)
+							{
+								std::invoke(task1, details::promise_wrapper<decltype(value), decltype(task2)>{std::forward<decltype(value)>(value), task2, scheduler}, scheduler);
+							}, p);
+					}
+					else
+					{
+						std::visit([&](auto&& value)
+							{
+								std::invoke(task1, details::promise_wrapper<decltype(value), decltype(task2)>{std::forward<decltype(value)>(value), task2, scheduler});
+							}, p);
+					}
 				}
 				else
 				{
@@ -280,25 +298,34 @@ namespace ASYNC_NAMESPACE
 
 			if constexpr (std::is_same<decltype(p), details::task_tag_type>::value)
 			{
-				return details::type_wrapper<std::vector<std::future<result_t>>>{};
+				return details::type_wrapper<std::vector<result_t>>{};
 			}
 			else
 			{
-				std::vector<std::future<result_t>> futures;
+				auto future = compute<execution::wait>
+					(
+						[&]()
+						{
+							std::vector<std::future<result_t>> futures;
+							std::apply([&](auto&& ... task)
+								{
+									(futures.emplace_back(std::move(compute<execution::async>(task))), ...);
+								}, tasks);
+							return futures;
+						}					
+					);
 
-				std::apply([&](auto&& ... task)
-					{
-						(futures.emplace_back(std::move(compute<execution::async>(task))), ...);
-					}, tasks);
+				std::vector<result_t> values;
+				for (auto&& value : future)
+					values.emplace_back(std::move(value.get()));
 
 				if constexpr (details::is_variant<decltype(p)>::value)
 				{
-					std::visit([&](auto&& value) {
-						value.set_value(std::move(futures)); }, p);
+					std::visit([&](auto&& value) {value.set_value(std::move(values)); }, p);
 				}
 				else
 				{
-					p.set_value(std::move(futures));
+					p.set_value(std::move(values));
 				}
 			}
 		};
@@ -327,60 +354,9 @@ namespace ASYNC_NAMESPACE
 			}
 			else
 			{
-				details::scheduler scheduler{};
+				details::scheduler scheduler{ execution::async };
 
-				task(details::promise_variant<T>{details::promise<T>{&state}}, & scheduler);
-
-				{
-					auto lock = std::unique_lock{ state.mutex };
-					state.condition_variable.wait(lock, [&state]()
-						{return state.data.index() != 0; });
-				}
-
-				if (state.data.index() == 1)
-					std::rethrow_exception(std::get<1>(state.data));
-
-				return std::move(std::get<2>(state.data));
-			}
-		}
-	}
-
-	/*
-	template<execution ex = execution::async, typename Task>
-	auto compute(Task&& task)
-	{
-		if constexpr (std::is_invocable<Task, void>::value)
-		{
-			using T = decltype(std::declval<Task>()());
-			if constexpr (ex == execution::async)
-			{
-				details::state_object<T> state;
-				std::promise<T> promise;
-				promise = std::move(task());
-				return promise.get_future();
-			}
-			else
-			{
-				return task();
-			}
-		}
-		else
-		{
-			using T = decltype(std::declval<Task>()(std::declval<void*>()));
-			if constexpr (ex == execution::async)
-			{
-				details::state_object<T> state;
-
-				std::promise<T> promise;
-				auto future = promise.get_future();
-				task(std::move(promise));
-				return future;
-			}
-			else
-			{
-				details::state_object<T> state;
-
-				task(details::promise_variant<T>{details::promise<T>{&state}});
+				task(details::promise_variant<T>{details::promise<T>{&state}}, &scheduler);
 
 				{
 					auto lock = std::unique_lock{ state.mutex };
@@ -395,14 +371,4 @@ namespace ASYNC_NAMESPACE
 			}
 		}
 	}
-	*/
-
-	struct sink
-	{
-		template<typename... Args>
-		void set_value(Args&& ... args) { }
-
-		template<typename T>
-		void set_exception(T&& e) { std::terminate(); }
-	};
 }
