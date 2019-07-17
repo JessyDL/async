@@ -770,10 +770,18 @@ namespace ASYNC2_NAMESPACE
 				if constexpr (details::is_continuation<FN1>::value && details::is_continuation<FN2>::value)
 				{
 					using result_t = typename decltype(std::declval<FN1>().template get_type<Args...>())::type;
-					if constexpr (std::is_same< result_t, void>::value)
+					if constexpr (std::is_same<result_t, void>::value)
 					{
 						compute<execution::wait>(first, std::forward<Args>(args)...);
-						p.set_value(compute<execution::wait>(second));
+						if constexpr (std::is_same<typename details::promise_type<T>::type, void>::value)
+						{
+							compute<execution::wait>(second);
+							p.set_value();
+						}
+						else
+						{
+							p.set_value(compute<execution::wait>(second));
+						}
 					}
 					else
 					{
@@ -891,7 +899,10 @@ namespace ASYNC2_NAMESPACE
 			template<typename T>
 			void set_exception(T&& e) { param.set_exception(std::forward<T>(e)); }
 		};
+		template<typename param_t, typename fn_t>
+		struct promise_type<promise_wrapper <param_t, fn_t>> : public promise_type< param_t> {};
 	}
+
 
 	template<typename FN1, typename FN2>
 	auto then(FN1&& fn1, FN2&& fn2)
@@ -910,9 +921,9 @@ namespace ASYNC2_NAMESPACE
 	auto into(FNn&& ... tasks)
 	{
 		auto task2 = std::get<sizeof...(FNn) - 1 >(std::tie(tasks...));
-		auto lambda{ [tasks = details::subtuple_(std::forward_as_tuple(tasks...), std::make_index_sequence<sizeof...(FNn) - 1>())] ()
+		auto lambda{ [tasks = details::subtuple_(std::forward_as_tuple(tasks...), std::make_index_sequence<sizeof...(FNn) - 1>())] () mutable
 		{
-			return std::apply([&](auto&& ... args)
+			return std::apply([&](auto&& ... args) mutable
 				{
 					// todo this can run deferred
 					return std::make_tuple(compute<execution::wait>(args)...);
@@ -924,16 +935,16 @@ namespace ASYNC2_NAMESPACE
 
 	namespace details
 	{
-		template<typename T>
+		template<typename T, typename... Args>
 		struct get_invocation_type
 		{
-			using type = std::invoke_result_t<T>;
+			using type = std::invoke_result_t<T, Args...>;
 		};
 
-		template<typename FN1, typename FN2>
-		struct get_invocation_type<continuation<FN1, FN2>>
+		template<typename FN1, typename FN2, typename... Args>
+		struct get_invocation_type<continuation<FN1, FN2>, Args...>
 		{
-			using type = typename decltype(std::declval<continuation<FN1, FN2>>().get_type())::type;
+			using type = typename decltype(std::declval<continuation<FN1, FN2>>().template get_type<Args...>())::type;
 		};
 	}
 
@@ -969,6 +980,87 @@ namespace ASYNC2_NAMESPACE
 					value.get();
 			}
 		});
+	}
+
+	template<typename T>
+	struct parallel_n_invocation
+	{
+		static const bool supports_invocation = std::is_invocable<T, invocation>::value;
+		static const bool is_continuation = false;
+	};
+
+	template<typename FN1, typename FN2>
+	struct parallel_n_invocation<details::continuation<FN1, FN2>>
+	{
+		static const bool supports_invocation = std::is_invocable<details::promise<typename decltype(std::declval<details::continuation<FN1, FN2>>().template get_type<invocation>())::type>, invocation>::value;
+		static const bool is_continuation = true;
+	};
+
+	template<typename R, typename FN>
+	auto parallel_n_impl(FN&& task, size_t count)
+	{
+		using result_t = R;
+
+		return then([task = std::forward<FN>(task), count]() mutable
+		{
+			std::vector<std::future<result_t>> futures;
+			/*for (auto i = 0u; i < count; ++i)
+			{
+				if constexpr (!details::is_continuation<FN>::value)
+				{
+					if constexpr (parallel_n_invocation<FN>::supports_invocation)
+					{
+						futures.emplace_back(std::move(compute<execution::async>(task, invocation{ i, count })));
+					}
+					else
+					{
+						futures.emplace_back(std::move(compute<execution::async>(task)));
+					}
+				}
+				else
+				{
+					if constexpr (parallel_n_invocation<FN>::supports_invocation)
+					{
+						futures.emplace_back(std::move(compute<execution::async>(task, invocation{ i, count })));
+					}
+					else
+					{
+						futures.emplace_back(std::move(compute<execution::async>(task)));
+					}
+				}
+			}*/
+			return futures;
+		}, [](std::vector<std::future<result_t>> futures)
+		{
+			if constexpr (!std::is_same< result_t, void>::value)
+			{
+				std::vector<result_t> values;
+				values.reserve(futures.size());
+				for (auto&& value : futures)
+					values.emplace_back(std::move(value.get()));
+				return values;
+			}
+			else
+			{
+				for (auto&& value : futures)
+					value.get();
+			}
+		});
+	}
+
+	template<typename FN>
+	auto parallel_n(FN&& task, size_t count)
+	{
+		constexpr bool continuation_pack = details::is_continuation<FN>::value;
+		if constexpr (parallel_n_invocation<FN>::supports_invocation)
+		{
+			return parallel_n_impl<typename details::get_invocation_type<FN, invocation>::type>(std::forward<FN>(task), count);
+		}
+		else
+		{
+			return parallel_n_impl<typename details::get_invocation_type<FN>::type>(std::forward<FN>(task), count);
+		}
+		
 	}
 
 	template<execution ex = execution::wait, typename Task, typename... Args>

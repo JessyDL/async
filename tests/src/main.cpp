@@ -6,8 +6,8 @@
 using namespace ASYNC2_NAMESPACE;
 #define TEST_THEN
 #define TEST_DISCONNECTED_THEN
-//#define TEST_PARALLEL_N
-//#define TEST_COMPLEX
+#define TEST_PARALLEL_N
+#define TEST_COMPLEX
 #define TEST_PARALLEL
 #define TEST_INTO
 
@@ -192,10 +192,10 @@ void test_parallel2()
 {
 #ifdef TEST_THEN
 #ifdef TEST_PARALLEL
-	/*auto task = into(parallel([]() { return 30; }, []() { return 10; }, []() { return 20; }), [](std::vector<int> futures) {return std::accumulate(std::begin(futures), std::end(futures), 0, [](int sum, int f) { return f + sum; }); });
+	auto task = into(parallel([]() { return 30; }, []() { return 10; }, []() { return 20; }), [](std::vector<int> futures) mutable {return std::accumulate(std::begin(futures), std::end(futures), 0, [](int sum, int f) { return f + sum; }); });
 	auto future = compute<execution::async>(task);
 	auto result = future.get();
-	assert(result == 60);*/
+	assert(result == 60);
 #endif
 #endif
 }
@@ -204,8 +204,13 @@ void test_parallel_n1()
 {
 #ifdef TEST_THEN
 #ifdef TEST_PARALLEL_N
-	auto task = into(parallel_n([]() { return 10; }, 10), [](std::vector<int> values)
-		{ return std::accumulate(std::begin(values), std::end(values), 0, [](int sum, int value) { return sum + value; }); });
+	auto task = into(parallel_n([]() 
+		{ return 10; }, 10), 
+		[](std::vector<int> values)
+		{ 
+			return std::accumulate(std::begin(values), std::end(values), 0, 
+				[](int sum, int value) { return sum + value; }); 
+		});
 
 	auto result = compute<execution::wait>(task);
 	assert(result == 100);
@@ -362,6 +367,7 @@ void complex_test2()
 		}, 4);
 
 	auto task = then(copy_to_cache, change_data, copy_from_cache, cleanup);
+
 	auto future = compute<execution::async>(task);
 	future.get();
 
@@ -381,7 +387,7 @@ void complex_test3()
 #ifdef TEST_THEN
 #ifdef TEST_COMPLEX
 #ifdef TEST_PARALLEL_N
-	constexpr size_t data_count = 10000;
+	/*constexpr size_t data_count = 10000;
 	std::vector<int> data(data_count);
 	std::iota(std::begin(data), std::end(data), 0);
 	void* cache = malloc(sizeof(int) * data_count);
@@ -424,7 +430,7 @@ void complex_test3()
 	{
 		assert(expected == value);
 		++expected;
-	}
+	}*/
 #endif
 #endif
 #endif
