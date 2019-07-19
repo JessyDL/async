@@ -23,10 +23,36 @@ namespace ASYNC2_NAMESPACE
 		auto subtuple_(std::tuple<T...>&& t, std::index_sequence<I...>) {
 			return std::make_tuple(std::get<I>(t)...);
 		}
-		
-		template <int Trim, typename... T>
-		auto subtuple(const std::tuple<T...>& t) {
-			return subtuple_(t, std::make_index_sequence<sizeof...(T) - Trim>());
+
+		template <std::size_t O, std::size_t ... Is>
+		std::index_sequence<(O + Is)...> add_offset(std::index_sequence<Is...>)
+		{
+			return {};
+		}
+
+		template <std::size_t N, std::size_t O = 0>
+		auto make_index_sequence()
+		{
+			return add_offset<O>(std::make_index_sequence<N>{});
+		}
+
+		template <std::size_t Length, std::size_t Offset, typename... T>
+		auto subtuple(std::tuple<T...>&& t) 
+		{
+			static_assert(Length + Offset <= sizeof...(T));
+			if constexpr (sizeof...(T) <= (Offset))
+				return std::tuple<>{};
+			else
+				return subtuple_(std::forward<decltype(t)>(t), make_index_sequence<sizeof...(T) - (Length + Offset), Offset>());
+		}
+
+		template<unsigned...s> struct seq { typedef seq<s...> type; };
+		template<unsigned max, unsigned... s> struct make_seq :make_seq<max - 1, max - 1, s...> {};
+		template<unsigned...s> struct make_seq<0, s...> :seq<s...> {};
+
+		template<unsigned... s, typename Tuple>
+		auto extract_tuple(seq<s...>, Tuple& tup) {
+			return std::make_tuple(std::get<s>(tup)...);
 		}
 
 		template<typename T>
@@ -305,6 +331,32 @@ namespace ASYNC2_NAMESPACE
 		return then(then(std::forward<FN1>(fn1), std::forward<FN2>(fn2)), std::forward<FNn>(fnn)...);
 	}
 
+	template<typename FN1>
+	auto disconnect(FN1&& fn1)
+	{
+		return then([](auto... v) -> void {}, std::forward<FN1>(fn1));
+	}
+
+
+	template<typename FN1, typename FN2, typename FN3>
+	auto then_or(FN1&& fn1, FN2&& fn2, FN3&& fn3)
+	{
+		return then(std::forward<FN1>(fn1), [fn2 = std::forward<FN2>(fn2), fn3 = std::forward<FN3>(fn3)](bool success, auto... values)
+		{
+			if (success)
+				return std::invoke(fn2, std::forward<decltype(values)>(values)...);
+			else
+				return std::invoke(fn3, std::forward<decltype(values)>(values)...);			
+		});
+	}
+
+	template<typename FN1, typename FN2, typename FN3, typename Pred>
+	auto then_or(FN1&& fn1, FN2&& fn2, FN3&& fn3, Pred&& pred)
+	{
+		using R = typename details::get_invocation_type<pred>::type;
+		static_assert(std::is_same<R, bool>::value || std::is_trivially_constructible<bool, R>::value);
+		return then(std::forward<FN1>(fn1), then_or(std::forward<Pred>(pred), std::forward<FN2>(fn2), std::forward<FN3>(fn3)));
+	}
 
 	template<typename... FNn>
 	auto into(FNn&& ... tasks)

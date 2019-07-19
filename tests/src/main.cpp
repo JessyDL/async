@@ -73,6 +73,12 @@ void test_continuation3()
 	auto result = compute<execution::wait>(task);
 	assert(result == 10);
 }
+void test_continuation4()
+{
+	auto task = then([]() {return true; }, [](bool value) { return 5; }, disconnect([]() { return 10;  }), [](int value) {return value * 2; });
+	auto result = compute<execution::wait>(task);
+	assert(result == 20);
+}
 
 void test_then1()
 {
@@ -141,6 +147,27 @@ void test_then6()
 	}
 	{
 		auto result = compute<execution::wait>([]() {return 10; });
+		assert(result == 10);
+	}
+}
+
+void test_then_or1()
+{
+	{
+		auto task = then_or(
+			[]()
+			{ return std::tuple{ true, 10 }; },
+			[](int value)
+			{ return  value; },
+			[](int value)
+			{ return value * 2; });
+		auto future = compute<execution::async>(task);
+		auto result = future.get();
+		assert(result == 10);
+	}
+	{
+		auto task = then_or([](bool value) { return value; }, []() { return 10; }, []() { return 20; });
+		auto result = compute<execution::wait>(task, true);
 		assert(result == 10);
 	}
 }
@@ -474,6 +501,8 @@ int main()
 
 	test_then5();
 	test_then6();
+
+	test_then_or1();
 
 	test_into1();
 	test_into2();
