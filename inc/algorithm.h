@@ -316,6 +316,31 @@ namespace ASYNC_NAMESPACE
 		};
 		template<typename param_t, typename fn_t>
 		struct promise_type<promise_wrapper <param_t, fn_t>> : public promise_type< param_t> {};
+
+
+		template<typename T, typename... Args>
+		struct get_invocation_type
+		{
+			using type = std::invoke_result_t<T, Args...>;
+		};
+
+		template<typename FN1, typename FN2, typename... Args>
+		struct get_invocation_type<continuation<FN1, FN2>, Args...>
+		{
+			using type = typename decltype(std::declval<continuation<FN1, FN2>>().template get_type<Args...>())::type;
+		};
+
+		template<typename FN, typename SFINAE = void>
+		struct parallel_invocation_result_type
+		{
+			using type = typename get_invocation_type<FN>::type;
+		};
+
+		template<typename FN>
+		struct parallel_invocation_result_type<FN, typename std::enable_if<std::is_invocable<FN, invocation>::value>::type>
+		{
+			using type = typename get_invocation_type<FN, invocation>::type;
+		};
 	}
 
 
@@ -374,21 +399,6 @@ namespace ASYNC_NAMESPACE
 		return details::continuation<decltype(lambda), decltype(task2)>{std::move(lambda), std::forward<decltype(task2)>(task2) };
 	}
 
-	namespace details
-	{
-		template<typename T, typename... Args>
-		struct get_invocation_type
-		{
-			using type = std::invoke_result_t<T, Args...>;
-		};
-
-		template<typename FN1, typename FN2, typename... Args>
-		struct get_invocation_type<continuation<FN1, FN2>, Args...>
-		{
-			using type = typename decltype(std::declval<continuation<FN1, FN2>>().template get_type<Args...>())::type;
-		};
-	}
-
 	template<typename... FN>
 	auto parallel(FN&& ... tasks)
 	{
@@ -422,51 +432,23 @@ namespace ASYNC_NAMESPACE
 		};
 	}
 
-	template<typename T>
-	struct parallel_n_invocation
+	template<typename FN>
+	auto parallel_n(FN&& task, size_t count)
 	{
-		static const bool supports_invocation = std::is_invocable<T, invocation>::value;
-		static const bool is_continuation = false;
-	};
-
-	template<typename FN1, typename FN2>
-	struct parallel_n_invocation<details::continuation<FN1, FN2>>
-	{
-		static const bool supports_invocation = std::is_invocable<details::promise<typename decltype(std::declval<details::continuation<FN1, FN2>>().template get_type<invocation>())::type>, invocation>::value;
-		static const bool is_continuation = true;
-	};
-
-	template<typename R, typename FN>
-	auto parallel_n_impl(FN&& task, size_t count)
-	{
-		using result_t = R;
-
+		using result_t = typename details::parallel_invocation_result_type<FN>::type;
 		return[task = std::forward<FN>(task), count]() mutable -> typename std::conditional<std::is_same<result_t, void>::value, void, std::vector<result_t>>::type
 		{
+			constexpr bool supports_invocation = std::is_invocable<FN, invocation>::value;
 			std::vector<std::future<result_t>> futures;
 			for (auto i = 0u; i < count; ++i)
 			{
-				if constexpr (!details::is_continuation<FN>::value)
+				if constexpr (supports_invocation)
 				{
-					if constexpr (parallel_n_invocation<FN>::supports_invocation)
-					{
-						futures.emplace_back(std::move(compute<execution::async>(task, invocation{ i, count })));
-					}
-					else
-					{
-						futures.emplace_back(std::move(compute<execution::async>(task)));
-					}
+					futures.emplace_back(std::move(compute<execution::async>(task, invocation{ i, count })));
 				}
 				else
 				{
-					if constexpr (parallel_n_invocation<FN>::supports_invocation)
-					{
-						futures.emplace_back(std::move(compute<execution::async>(task, invocation{ i, count })));
-					}
-					else
-					{
-						futures.emplace_back(std::move(compute<execution::async>(task)));
-					}
+					futures.emplace_back(std::move(compute<execution::async>(task)));
 				}
 			}
 
@@ -484,21 +466,6 @@ namespace ASYNC_NAMESPACE
 					value.get();
 			}
 		};
-	}
-
-	template<typename FN>
-	auto parallel_n(FN&& task, size_t count)
-	{
-		constexpr bool continuation_pack = details::is_continuation<FN>::value;
-		if constexpr (parallel_n_invocation<FN>::supports_invocation)
-		{
-			return parallel_n_impl<typename details::get_invocation_type<FN, invocation>::type>(std::forward<FN>(task), count);
-		}
-		else
-		{
-			return parallel_n_impl<typename details::get_invocation_type<FN>::type>(std::forward<FN>(task), count);
-		}
-		
 	}
 
 	template<execution ex = execution::wait, typename Task, typename... Args>
