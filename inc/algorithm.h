@@ -5,7 +5,7 @@
 #include <future>
 #include <functional>
 
-namespace ASYNC2_NAMESPACE
+namespace ASYNC_NAMESPACE
 {
 	enum class execution
 	{

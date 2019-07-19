@@ -3,7 +3,7 @@
 #include <iostream>
 #include <cassert>
 #include <numeric>
-using namespace ASYNC2_NAMESPACE;
+using namespace ASYNC_NAMESPACE;
 #define TEST_THEN
 #define TEST_DISCONNECTED_THEN
 #define TEST_PARALLEL_N

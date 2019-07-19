@@ -5,4 +5,3 @@
 #ifndef ASYNC_NAMESPACE
 #define ASYNC_NAMESPACE async
 #endif
-#define ASYNC2_NAMESPACE async2
