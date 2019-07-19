@@ -47,7 +47,31 @@ void test_continuation2()
 
 	auto task = then(sub_task1, sub_task2);
 	auto result = compute<execution::wait>(task);
-	//assert(result == 10);
+	assert(result == 10);
+}
+
+void test_continuation3()
+{
+	bool state = false;
+	auto sub_task1 = then(
+		[]() -> void
+		{},
+		[&state]() -> void
+		{ state = true; }
+	);
+	auto sub_task2 = then(
+		[&state]()
+		{
+			return (state) ? 2.0 : 0.0;
+		},
+		[](double value)
+		{
+			return (value == 2.0) ? 10 : 0;
+		}
+		);
+	auto task = then(sub_task1, sub_task2);
+	auto result = compute<execution::wait>(task);
+	assert(result == 10);
 }
 
 void test_then1()
@@ -387,7 +411,7 @@ void complex_test3()
 #ifdef TEST_THEN
 #ifdef TEST_COMPLEX
 #ifdef TEST_PARALLEL_N
-	/*constexpr size_t data_count = 10000;
+	constexpr size_t data_count = 10000;
 	std::vector<int> data(data_count);
 	std::iota(std::begin(data), std::end(data), 0);
 	void* cache = malloc(sizeof(int) * data_count);
@@ -430,7 +454,7 @@ void complex_test3()
 	{
 		assert(expected == value);
 		++expected;
-	}*/
+	}
 #endif
 #endif
 #endif
@@ -441,6 +465,7 @@ int main()
 	_CrtSetDbgFlag(_CRTDBG_ALLOC_MEM_DF | _CRTDBG_LEAK_CHECK_DF);
 	test_continuation();
 	test_continuation2();
+	test_continuation3();
 
 	test_then1();
 	test_then2();
