@@ -19,6 +19,20 @@ namespace ASYNC_NAMESPACE
 	};
 	namespace details
 	{
+		// scheduler like object
+		class scheduler
+		{
+		public:
+			template<typename F>
+			void do_work(F&& f)
+			{
+
+			}
+
+		private:
+
+		};
+
 		template <typename... T, std::size_t... I>
 		auto subtuple_(std::tuple<T...>&& t, std::index_sequence<I...>) {
 			return std::make_tuple(std::get<I>(t)...);
@@ -46,12 +60,8 @@ namespace ASYNC_NAMESPACE
 				return subtuple_(std::forward<decltype(t)>(t), make_index_sequence<sizeof...(T) - (Length + Offset), Offset>());
 		}
 
-		template<unsigned...s> struct seq { typedef seq<s...> type; };
-		template<unsigned max, unsigned... s> struct make_seq :make_seq<max - 1, max - 1, s...> {};
-		template<unsigned...s> struct make_seq<0, s...> :seq<s...> {};
-
 		template<unsigned... s, typename Tuple>
-		auto extract_tuple(seq<s...>, Tuple& tup) {
+		auto extract_tuple(std::index_sequence<s...>, Tuple& tup) {
 			return std::make_tuple(std::get<s>(tup)...);
 		}
 
@@ -356,25 +366,54 @@ namespace ASYNC_NAMESPACE
 		return then(then(std::forward<FN1>(fn1), std::forward<FN2>(fn2)), std::forward<FNn>(fnn)...);
 	}
 
+
+	/// \brief Disconnects computation results from previous results
+	///
+	/// \details When you don't need, or care, for the results of the previous computation then using this function
+	/// will wrap your given invocable into a wrapper that will throw away the results of the previous computation.
 	template<typename FN1>
 	auto disconnect(FN1&& fn1)
 	{
 		return then([](auto... v) -> void {}, std::forward<FN1>(fn1));
 	}
 
-
+	/// \brief Complexer then statement that allows a forked behaviour based on the first result.
+	///
+	/// \details A continuation that will look at the result of the first invocable (FN1), and will then call either 
+	/// FN2 (true) or FN3 (false).
+	/// FN1 can return a tuple to pass arguments forward into the following tasks, as long as the first element of the
+	/// tuple is a bool indicating success or fail.
 	template<typename FN1, typename FN2, typename FN3>
 	auto then_or(FN1&& fn1, FN2&& fn2, FN3&& fn3)
 	{
 		return then(std::forward<FN1>(fn1), [fn2 = std::forward<FN2>(fn2), fn3 = std::forward<FN3>(fn3)](bool success, auto... values)
 		{
 			if (success)
-				return std::invoke(fn2, std::forward<decltype(values)>(values)...);
+				return compute<execution::wait>(fn2, std::forward<decltype(values)>(values)...);
 			else
-				return std::invoke(fn3, std::forward<decltype(values)>(values)...);			
+				return compute<execution::wait>(fn3, std::forward<decltype(values)>(values)...);
 		});
 	}
 
+	template<typename FN1, typename FN2, typename FN3>
+	auto then_or_variant(FN1&& fn1, FN2&& fn2, FN3&& fn3)
+	{
+		return then(std::forward<FN1>(fn1), [fn2 = std::forward<FN2>(fn2), fn3 = std::forward<FN3>(fn3)](auto result) mutable
+		{
+			if (result.index() == 0)
+				return compute<execution::wait>(fn2, std::forward<decltype(std::get<0>(result))>(std::get<0>(result)));
+			else
+				return compute<execution::wait>(fn3, std::forward<decltype(std::get<1>(result))>(std::get<1>(result)));
+		});
+	}
+	/// \brief Complexer then statement that allows a forked behaviour based on the first result.
+	///
+	/// \details A continuation that will look at the result of the first invocable (FN1), and will then call either 
+	/// FN2 (true) or FN3 (false) based on the result of the predicate.
+	/// FN1 can return a tuple to pass arguments forward into the following tasks, as long as the first element of the
+	/// tuple is a bool indicating success or fail.
+	/// The Pred can return a tuple to pass arguments forward into the following tasks, as long as the first element of the
+	/// tuple is a bool indicating success or fail
 	template<typename FN1, typename FN2, typename FN3, typename Pred>
 	auto then_or(FN1&& fn1, FN2&& fn2, FN3&& fn3, Pred&& pred)
 	{
@@ -383,53 +422,158 @@ namespace ASYNC_NAMESPACE
 		return then(std::forward<FN1>(fn1), then_or(std::forward<Pred>(pred), std::forward<FN2>(fn2), std::forward<FN3>(fn3)));
 	}
 
-	template<typename... FNn>
-	auto into(FNn&& ... tasks)
+	namespace details
 	{
-		auto task2 = std::get<sizeof...(FNn) - 1 >(std::tie(tasks...));
-		auto lambda{ [tasks = details::subtuple_(std::forward_as_tuple(tasks...), std::make_index_sequence<sizeof...(FNn) - 1>())] () mutable
+		template<typename T, typename... FN>
+		struct all_return : std::bool_constant < (std::is_same<T, typename details::get_invocation_type<FN>::type>{} && ...) >
 		{
-			return std::apply([&](auto&& ... args) mutable
+		};
+
+		// machinery to make an index sequence of a tuple that filters out the given type (match), or that makes a tuple with only the given type (mismatch)
+		template<size_t... first, size_t... second>
+		constexpr std::index_sequence<first..., second...> append(std::index_sequence<first...>, std::index_sequence<second...>) { return {}; }
+
+		template<typename P, size_t Current, typename T, typename Tu, typename SFINEA = void>
+		struct match
+		{
+			using type = P;
+		};
+
+		template<size_t ... S, size_t Current, typename T, typename Y, typename... Args>
+		struct match<std::index_sequence<S...>,
+			Current,
+			T,
+			std::tuple<Y, Args...>,
+			std::enable_if_t<!std::is_same<T, Y>::value>>
+			: match<decltype(append(std::index_sequence<S...>{}, std::index_sequence<Current>{})), Current + 1, T, std::tuple<Args... >>
+		{
+
+		};
+		template<size_t ... S, size_t Current, typename T, typename Y, typename... Args>
+		struct match<std::index_sequence<S...>,
+			Current,
+			T,
+			std::tuple<Y, Args...>,
+			std::enable_if_t<std::is_same<T, Y>::value>>
+			: match<std::index_sequence<S...>, Current + 1, T, std::tuple<Args...>>
+		{
+
+		};
+
+		template<typename P, size_t Current, typename T, typename Tu, typename SFINEA = void>
+		struct mismatch
+		{
+			using type = P;
+		};
+
+		template<size_t ... S, size_t Current, typename T, typename Y, typename... Args>
+		struct mismatch<std::index_sequence<S...>,
+			Current,
+			T,
+			std::tuple<Y, Args...>,
+			std::enable_if_t<std::is_same<T, Y>::value>>
+			: mismatch<decltype(append(std::index_sequence<S...>{}, std::index_sequence<Current>{})), Current + 1, T, std::tuple<Args... >>
+		{
+
+		};
+		template<size_t ... S, size_t Current, typename T, typename Y, typename... Args>
+		struct mismatch<std::index_sequence<S...>,
+			Current,
+			T,
+			std::tuple<Y, Args...>,
+			std::enable_if_t<!std::is_same<T, Y>::value>>
+			: mismatch<std::index_sequence<S...>, Current + 1, T, std::tuple<Args...>>
+		{
+
+		};
+
+		template<typename T, typename U>
+		struct make_index_sequence_match
+		{
+
+		};
+
+		template<typename T, typename... Args>
+		struct make_index_sequence_match<T, std::tuple<Args...>> : match<std::index_sequence<>, 0, T, std::tuple<Args...>>
+		{
+		};
+
+		template<typename T, typename U>
+		struct make_index_sequence_mismatch
+		{
+
+		};
+
+		template<typename T, typename... Args>
+		struct make_index_sequence_mismatch<T, std::tuple<Args...>> : mismatch<std::index_sequence<>, 0, T, std::tuple<Args...>>
+		{
+		};
+
+		template<size_t... S1, size_t... S2, typename F>
+		auto get(std::index_sequence<S1...>, std::index_sequence<S2...>, F&& f)
+		{
+			(void(std::get<S1>(f).get()), ...);
+			return std::tuple(std::move(std::get<S2>(f).get()) ...);
+		}
+	}
+
+	namespace details
+	{
+		template<typename... FN>
+		auto parallel(std::tuple<FN...>&& tasks)
+		{
+			static_assert(sizeof...(FN) > 1);
+
+			using result_t = typename details::get_invocation_type<std::tuple_element_t<0, std::tuple<FN...>>>::type;
+			if constexpr (details::all_return<result_t, FN...>::value)
+			{
+				return[tasks = std::forward<std::tuple<FN...>>(tasks)]() mutable -> typename std::conditional<std::is_same<result_t, void>::value, void, std::vector<result_t>>::type
 				{
-					// todo this can run deferred
-					return std::make_tuple(compute<execution::wait>(args)...);
-				}, std::move(tasks));
-		} };
-	
-		return details::continuation<decltype(lambda), decltype(task2)>{std::move(lambda), std::forward<decltype(task2)>(task2) };
+					auto futures = std::apply([](auto&& ... task) mutable
+						{
+							std::vector<std::future<result_t>> values;
+							values.reserve(sizeof...(task));
+							(values.emplace_back(compute<execution::async>(task)), ...);
+							return std::move(values);
+						}, std::forward<decltype(tasks)>(tasks));
+
+					if constexpr (!std::is_same< result_t, void>::value)
+					{
+						std::vector<result_t> values;
+						values.reserve(futures.size());
+						for (auto&& value : futures)
+							values.emplace_back(std::move(value.get()));
+						return values;
+					}
+					else
+					{
+						for (auto&& value : futures)
+							value.get();
+					}
+				};
+			}
+			else
+			{
+				return[tasks = std::forward<std::tuple<FN...>>(tasks)]() mutable
+				{
+					auto futures = std::move(std::apply([](auto&& ... task) mutable
+						{
+							return std::tuple(compute<execution::async>(task) ...);
+						}, std::forward<decltype(tasks)>(tasks)));
+
+					using void_types = typename details::make_index_sequence_mismatch<std::future<void>, decltype(futures)>::type;
+					using real_types = typename details::make_index_sequence_match<std::future<void>, decltype(futures)>::type;
+
+					return details::get(void_types{}, real_types{}, futures);
+				};
+			}
+		}
 	}
 
 	template<typename... FN>
 	auto parallel(FN&& ... tasks)
 	{
-		static_assert(sizeof...(FN) > 1);
-
-		using result_t = typename details::get_invocation_type<std::tuple_element_t<0, std::tuple<FN...>>>::type;
-
-		return[tasks = std::make_tuple(std::forward<FN>(tasks)...)]() mutable -> typename std::conditional<std::is_same<result_t, void>::value, void, std::vector<result_t>>::type
-		{
-			auto futures = std::apply([](auto&& ... task) mutable
-				{
-					std::vector<std::future<result_t>> values;
-					values.reserve(sizeof...(task));
-					(values.emplace_back(compute<execution::async>(task)), ...);
-					return std::move(values);
-				}, std::forward<decltype(tasks)>(tasks));
-
-			if constexpr (!std::is_same< result_t, void>::value)
-			{
-				std::vector<result_t> values;
-				values.reserve(futures.size());
-				for (auto&& value : futures)
-					values.emplace_back(std::move(value.get()));
-				return values;
-			}
-			else
-			{
-				for (auto&& value : futures)
-					value.get();
-			}
-		};
+		return details::parallel(std::forward_as_tuple(tasks...));
 	}
 
 	template<typename FN>
@@ -466,6 +610,31 @@ namespace ASYNC_NAMESPACE
 					value.get();
 			}
 		};
+	}
+	
+	namespace details
+	{
+		template<size_t... S, typename T>
+		auto into(std::index_sequence<S...>, T&& t)
+		{
+			return then(details::parallel(std::forward_as_tuple(std::get<S>(t)...)), std::forward<decltype(std::get<std::tuple_size_v<T> -1>(t))>(std::get<std::tuple_size_v<T> -1>(t)));
+		}
+
+		template<typename T>
+		auto into(T&& t)
+		{
+			return into(std::make_index_sequence<std::tuple_size_v<T> -1>{}, std::forward<T>(t));
+		}
+	}
+
+	/// \brief Aggregates the results of the preceding tasks.
+	///
+	/// \details Allows aggregegating the results of the previous tasks into a final task. Each of the preceding tasks
+	/// are considered a bifurcation, and will be (potentially) ran concurrently.
+	template<typename... FNn>
+	auto into(FNn&& ... tasks)
+	{		
+		return details::into(std::forward_as_tuple(tasks...));
 	}
 
 	template<execution ex = execution::wait, typename Task, typename... Args>

@@ -172,6 +172,31 @@ void test_then_or1()
 	}
 }
 
+void test_then_or_variant1()
+{
+	{
+		auto task = then_or_variant(
+			[](bool value)
+			{
+				if (value)
+					return std::variant<int, double>(10);
+				else
+					return std::variant<int, double>(20.0);
+			},
+			[](int value)
+			{ return  value; },
+			then([](double value)
+				{ return value * 2; }, [](double value) -> int { return (int)value; }));
+		auto future = compute<execution::async>(task, false);
+		auto result = future.get();
+		assert(result == 40);
+	}
+	{
+		auto task = then_or([](bool value) { return value; }, []() { return 10; }, []() { return 20; });
+		auto result = compute<execution::wait>(task, true);
+		assert(result == 10);
+	}
+}
 void test_into1()
 {
 #ifdef TEST_THEN
@@ -243,7 +268,7 @@ void test_parallel2()
 {
 #ifdef TEST_THEN
 #ifdef TEST_PARALLEL
-	auto task = into(parallel([]() { return 30; }, []() { return 10; }, []() { return 20; }), [](std::vector<int> futures) mutable {return std::accumulate(std::begin(futures), std::end(futures), 0, [](int sum, int f) { return f + sum; }); });
+	auto task = then(parallel([]() { return 30; }, []() { return 10; }, []() { return 20; }), [](std::vector<int> futures) mutable {return std::accumulate(std::begin(futures), std::end(futures), 0, [](int sum, int f) { return f + sum; }); });
 	auto future = compute<execution::async>(task);
 	auto result = future.get();
 	assert(result == 60);
@@ -251,11 +276,29 @@ void test_parallel2()
 #endif
 }
 
+void test_parallel3()
+{
+	auto task = then(parallel([]() { return 30; }, []() { return false; }, []() { return 10; }), [](int v1, bool t, int v2) { return (t) ? v1 : v2; });
+	auto future = compute<execution::async>(task);
+	auto result = future.get();
+	assert(result == 10);
+}
+
+void test_parallel4()
+{
+	std::tuple<int, bool> v;
+
+	auto task = then(parallel([]() { return 30; }, []() {}, []() { return false; }, []() { return 10; }, []() {}), [](int v1, bool t, int v2) { return (t) ? v1 : v2; });
+	auto future = compute<execution::async>(task);
+	auto result = future.get();
+	assert(result == 10);
+}
+
 void test_parallel_n1()
 {
 #ifdef TEST_THEN
 #ifdef TEST_PARALLEL_N
-	auto task = into(parallel_n([]() 
+	auto task = then(parallel_n([]() 
 		{ return 10; }, 10), 
 		[](std::vector<int> values)
 		{ 
@@ -273,7 +316,7 @@ void test_parallel_n2()
 {
 #ifdef TEST_THEN
 #ifdef TEST_PARALLEL_N
-	auto task = into(parallel_n([]() { return 10; }, 10), [](std::vector<int> values)
+	auto task = then(parallel_n([]() { return 10; }, 10), [](std::vector<int> values)
 		{ return std::accumulate(std::begin(values), std::end(values), 0, [](int sum, int value) { return sum + value; }); });
 
 	auto future = compute<execution::async>(task);
@@ -503,6 +546,7 @@ int main()
 	test_then6();
 
 	test_then_or1();
+	test_then_or_variant1();
 
 	test_into1();
 	test_into2();
@@ -510,6 +554,8 @@ int main()
 
 	test_parallel1();
 	test_parallel2();
+	test_parallel3();
+	test_parallel4();
 
 	test_parallel_n1();
 	test_parallel_n2();
