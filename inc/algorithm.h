@@ -497,29 +497,13 @@ namespace ASYNC_NAMESPACE
 		{
 			if(value.index() == 0)
 			{
-				if constexpr(details::is_invocable<FN1, T>::value)
-				{
-					return compute<execution::wait>(std::forward<FN1>(fn1),
-													std::forward<decltype(std::get<0>(value))>(std::get<0>(value)));
-				}
-				else
-				{
-					return compute<execution::wait>(std::forward<FN2>(fn2),
-													std::forward<decltype(std::get<0>(value))>(std::get<0>(value)));
-				}
+				return compute<execution::wait>(std::forward<FN1>(fn1),
+												std::forward<decltype(std::get<0>(value))>(std::get<0>(value)));
 			}
 			else
 			{
-				if constexpr(details::is_invocable<FN1, T>::value)
-				{
-					return compute<execution::wait>(std::forward<FN1>(fn1),
-													std::forward<decltype(std::get<1>(value))>(std::get<1>(value)));
-				}
-				else
-				{
-					return compute<execution::wait>(std::forward<FN2>(fn2),
-													std::forward<decltype(std::get<1>(value))>(std::get<1>(value)));
-				}
+				return compute<execution::wait>(std::forward<FN2>(fn2),
+												std::forward<decltype(std::get<1>(value))>(std::get<1>(value)));
 			}
 		}
 		template <typename FN1, typename FN2, typename T, typename... Ts>

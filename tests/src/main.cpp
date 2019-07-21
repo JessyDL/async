@@ -155,7 +155,7 @@ void test_then_or1()
 void test_then_or_variant1()
 {
 	{
-		auto task = then_or_variant(
+		auto task = then_or(
 			[](bool value) {
 				if(value)
 					return std::variant<int, double>(10);
