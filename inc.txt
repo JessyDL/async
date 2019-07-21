@@ -1,5 +1,4 @@
 SET(INC 
-stdafx_async.h
 algorithm.h
 )
 

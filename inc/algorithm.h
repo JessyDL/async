@@ -1,5 +1,9 @@
 #pragma once
-#include "stdafx_async.h"
+
+#ifndef ASYNC_NAMESPACE
+#define ASYNC_NAMESPACE async
+#endif
+
 #include <mutex>
 #include <variant>
 #include <future>
