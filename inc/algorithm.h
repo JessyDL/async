@@ -552,18 +552,6 @@ namespace ASYNC_NAMESPACE
 					});
 	}
 
-	template <typename FN1, typename FN2, typename FN3>
-	auto then_or_variant(FN1&& fn1, FN2&& fn2, FN3&& fn3)
-	{
-		return then(std::forward<FN1>(fn1), [fn2 = std::forward<FN2>(fn2),
-											 fn3 = std::forward<FN3>(fn3)](auto result) mutable {
-			if(result.index() == 0)
-				return compute<execution::wait>(fn2, std::forward<decltype(std::get<0>(result))>(std::get<0>(result)));
-			else
-				return compute<execution::wait>(fn3, std::forward<decltype(std::get<1>(result))>(std::get<1>(result)));
-		});
-	}
-
 	/// \brief Complexer then statement that allows a forked behaviour based on the first result.
 	///
 	/// \details A continuation that will look at the result of the first invocable (FN1), and will then call either
