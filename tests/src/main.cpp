@@ -3,9 +3,12 @@
 #include <crtdbg.h>
 
 #include "algorithm.h"
-#include <iostream>
 #include <cassert>
 #include <numeric>
+#include <cstring>
+#include <vector>
+#include <array>
+#include <optional>
 using namespace ASYNC_NAMESPACE;
 #define TEST_THEN
 #define TEST_DISCONNECTED_THEN
@@ -16,11 +19,12 @@ using namespace ASYNC_NAMESPACE;
 
 void test_continuation()
 {
-	auto task   = then([]() { return true; }, [](bool value) { return 5; });
+	auto task   = then([]() { return true; }, [](bool value) { return (value) ? 5 : 0; });
 	auto result = compute<execution::wait>(task);
 	assert(result == 5);
 
-	auto task2   = then([]() { return true; }, [](bool value) { return 5; }, [](int value) { return value * 2; });
+	auto task2 =
+		then([]() { return true; }, [](bool value) { return (value) ? 5 : 0; }, [](int value) { return value * 2; });
 	auto result2 = compute<execution::wait>(task2);
 	assert(result2 == 10);
 
@@ -52,8 +56,8 @@ void test_continuation3()
 }
 void test_continuation4()
 {
-	auto task   = then([]() { return true; }, [](bool value) { return 5; }, disconnect([]() { return 10; }),
-					   [](int value) { return value * 2; });
+	auto task = then([]() { return true; }, [](bool value) { return (value) ? 5 : 0; }, disconnect([]() { return 10; }),
+					 [](int value) { return value * 2; });
 	auto result = compute<execution::wait>(task);
 	assert(result == 20);
 }
@@ -61,7 +65,7 @@ void test_continuation4()
 void test_then1()
 {
 #ifdef TEST_THEN
-	auto task   = then([]() { return true; }, [](bool value) { return 5; });
+	auto task   = then([]() { return true; }, [](bool value) { return (value) ? 5 : 0; });
 	auto result = compute<execution::wait>(task);
 	assert(result == 5);
 #endif
@@ -70,7 +74,7 @@ void test_then1()
 void test_then2()
 {
 #ifdef TEST_THEN
-	auto task   = then([]() { return true; }, [](bool value) { return 5; });
+	auto task   = then([]() { return true; }, [](bool value) { return (value) ? 5 : 0; });
 	auto future = compute<execution::async>(task);
 	auto result = future.get();
 	assert(result == 5);
@@ -80,7 +84,8 @@ void test_then2()
 void test_then3()
 {
 #ifdef TEST_THEN
-	auto task   = then([]() { return true; }, [](bool value) { return 0; }, [](int value) { return 10; });
+	auto task =
+		then([]() { return true; }, [](bool value) { return (value) ? 0 : 5; }, [](int value) { return value + 10; });
 	auto result = compute<execution::wait>(task);
 	;
 	assert(result == 10);
@@ -90,7 +95,8 @@ void test_then3()
 void test_then4()
 {
 #ifdef TEST_THEN
-	auto task   = then([]() { return true; }, [](bool value) { return 0; }, [](int value) { return 10; });
+	auto task =
+		then([]() { return true; }, [](bool value) { return (value) ? 0 : 5; }, [](int value) { return value + 10; });
 	auto future = compute<execution::async>(task);
 	auto result = future.get();
 	assert(result == 10);
@@ -133,11 +139,8 @@ void test_then6()
 void test_then_or1()
 {
 	{
-		auto task = then_or(
-			[]() {
-				return std::tuple{true, 10};
-			},
-			[](int value) { return value; }, [](int value) { return value * 2; });
+		auto task   = then_or([]() { return std::optional<int>(10); },
+							  [](std::optional<int> value) { return value.value(); }, []() { return 2; });
 		auto future = compute<execution::async>(task);
 		auto result = future.get();
 		assert(result == 10);
@@ -226,6 +229,7 @@ void test_parallel1()
 #ifdef TEST_PARALLEL
 	auto task   = parallel([]() { return 30; }, []() { return 10; }, []() { return 20; });
 	auto future = compute<execution::async>(task);
+
 	auto result = future.get();
 	assert(std::accumulate(std::begin(result), std::end(result), 0, [](int sum, int f) { return f + sum; }) == 60);
 #endif
@@ -237,8 +241,8 @@ void test_parallel2()
 #ifdef TEST_THEN
 #ifdef TEST_PARALLEL
 	auto task = then(
-		parallel([]() { return 30; }, []() { return 10; }, []() { return 20; }), [](std::vector<int> futures) mutable {
-			return std::accumulate(std::begin(futures), std::end(futures), 0, [](int sum, int f) { return f + sum; });
+		parallel([]() { return 30; }, []() { return 10; }, []() { return 20; }), [](std::array<int, 3> values) mutable {
+			return std::accumulate(std::begin(values), std::end(values), 0, [](int sum, int f) { return f + sum; });
 		});
 	auto future = compute<execution::async>(task);
 	auto result = future.get();
@@ -271,7 +275,7 @@ void test_parallel_n1()
 {
 #ifdef TEST_THEN
 #ifdef TEST_PARALLEL_N
-	auto task = then(parallel_n([]() { return 10; }, 10), [](std::vector<int> values) {
+	auto task = then(parallel_n<10>([]() { return 10; }), [](std::array<int, 10> values) {
 		return std::accumulate(std::begin(values), std::end(values), 0, [](int sum, int value) { return sum + value; });
 	});
 

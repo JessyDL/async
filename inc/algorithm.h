@@ -4,11 +4,14 @@
 #define ASYNC_NAMESPACE async
 #endif
 
-#include <mutex>
 #include <variant>
+#include <mutex>
 #include <future>
-#include <functional>
-
+#include <functional> // std::invoke && std::apply
+#ifndef ASYNC_MINIMAL_INCLUDE
+#include <vector>
+#include <array>
+#endif
 namespace ASYNC_NAMESPACE
 {
 	enum class execution
@@ -16,6 +19,10 @@ namespace ASYNC_NAMESPACE
 		async = 0,
 		wait  = 1
 	};
+
+	template <execution ex = execution::wait, typename Task, typename... Args>
+	auto compute(Task&& task, Args&&... args);
+
 	struct invocation
 	{
 		size_t index{0u};
@@ -23,6 +30,15 @@ namespace ASYNC_NAMESPACE
 	};
 	namespace details
 	{
+		template <typename T>
+		struct remove_cvref
+		{
+			using type = std::remove_reference_t<std::remove_cv_t<T>>;
+		};
+
+		template <typename T>
+		using remove_cvref_t = typename remove_cvref<T>::type;
+
 		// scheduler like object
 		class scheduler
 		{
@@ -75,6 +91,14 @@ namespace ASYNC_NAMESPACE
 
 		template <typename... Ts>
 		struct is_tuple<std::tuple<Ts...>> : std::true_type
+		{};
+
+		template <typename T>
+		struct is_variant : std::false_type
+		{};
+
+		template <typename... Ts>
+		struct is_variant<std::variant<Ts...>> : std::true_type
 		{};
 
 		template <typename T>
@@ -175,6 +199,22 @@ namespace ASYNC_NAMESPACE
 		};
 
 		template <typename T>
+		struct promise_type
+		{
+			using type = T;
+		};
+		template <typename T>
+		struct promise_type<std::promise<T>>
+		{
+			using type = T;
+		};
+		template <typename T>
+		struct promise_type<details::promise<T>>
+		{
+			using type = T;
+		};
+
+		template <typename T>
 		struct continuation_result
 		{
 			using type = typename function_traits<decltype(std::function{std::declval<T>()})>::result_type;
@@ -197,6 +237,61 @@ namespace ASYNC_NAMESPACE
 
 		template <typename Fn, typename... Args>
 		using invoke_result_t = typename invoke_result<Fn, Args...>::type;
+
+
+		template <typename param_t, typename fn_t>
+		struct promise_wrapper
+		{
+			param_t param;
+			fn_t func;
+			/*details::scheduler* scheduler;
+
+			void spawn()
+			{
+				scheduler->start_work(*this);
+			}*/
+
+			template <typename... Args>
+			auto set_value(Args&&... args)
+			{
+				if constexpr(sizeof...(Args) == 1 && !std::is_invocable<fn_t, Args...>::value)
+				{
+					// allow for empty continuations
+					if constexpr(std::is_same<decltype(std::apply(func, std::forward<Args>(args)...)), void>::value)
+					{
+						std::apply(func, std::forward<Args>(args)...);
+						param.set_value();
+					}
+					else
+					{
+						param.set_value(std::apply(func, std::forward<Args>(args)...));
+					}
+				}
+				else
+				{
+					// allow for empty continuations
+					if constexpr(std::is_same<invoke_result_t<fn_t, Args...>, void>::value)
+					{
+						std::invoke(func, std::forward<Args>(args)...);
+						param.set_value();
+					}
+					else
+					{
+						param.set_value(std::invoke(func, std::forward<Args>(args)...));
+					}
+				}
+			}
+
+			template <typename T>
+			void set_exception(T&& e)
+			{
+				param.set_exception(std::forward<T>(e));
+			}
+		};
+		template <typename param_t, typename fn_t>
+		struct promise_type<promise_wrapper<param_t, fn_t>> : public promise_type<param_t>
+		{};
+
 
 		template <typename FN1, typename FN2>
 		struct continuation
@@ -280,84 +375,6 @@ namespace ASYNC_NAMESPACE
 			FN2 second;
 		};
 
-		template <typename T>
-		struct remove_cvref
-		{
-			using type = std::remove_reference_t<std::remove_cv_t<T>>;
-		};
-
-		template <typename T>
-		using remove_cvref_t = typename remove_cvref<T>::type;
-
-		template <typename T>
-		struct promise_type
-		{
-			using type = T;
-		};
-		template <typename T>
-		struct promise_type<std::promise<T>>
-		{
-			using type = T;
-		};
-		template <typename T>
-		struct promise_type<details::promise<T>>
-		{
-			using type = T;
-		};
-
-		template <typename param_t, typename fn_t>
-		struct promise_wrapper
-		{
-			param_t param;
-			fn_t func;
-			/*details::scheduler* scheduler;
-
-			void spawn()
-			{
-				scheduler->start_work(*this);
-			}*/
-
-			template <typename... Args>
-			auto set_value(Args&&... args)
-			{
-				if constexpr(sizeof...(Args) == 1 && !std::is_invocable<fn_t, Args...>::value)
-				{
-					// allow for empty continuations
-					if constexpr(std::is_same<decltype(std::apply(func, std::forward<Args>(args)...)), void>::value)
-					{
-						std::apply(func, std::forward<Args>(args)...);
-						param.set_value();
-					}
-					else
-					{
-						param.set_value(std::apply(func, std::forward<Args>(args)...));
-					}
-				}
-				else
-				{
-					// allow for empty continuations
-					if constexpr(std::is_same<invoke_result_t<fn_t, Args...>, void>::value)
-					{
-						std::invoke(func, std::forward<Args>(args)...);
-						param.set_value();
-					}
-					else
-					{
-						param.set_value(std::invoke(func, std::forward<Args>(args)...));
-					}
-				}
-			}
-
-			template <typename T>
-			void set_exception(T&& e)
-			{
-				param.set_exception(std::forward<T>(e));
-			}
-		};
-		template <typename param_t, typename fn_t>
-		struct promise_type<promise_wrapper<param_t, fn_t>> : public promise_type<param_t>
-		{};
-
 
 		template <typename T, typename... Args>
 		struct get_invocation_type
@@ -370,6 +387,15 @@ namespace ASYNC_NAMESPACE
 		{
 			using type = typename decltype(std::declval<continuation<FN1, FN2>>().template get_type<Args...>())::type;
 		};
+
+		template <typename T, typename... Args>
+		struct is_invocable : std::is_invocable<T, Args...>
+		{};
+
+		template <typename FN1, typename FN2, typename... Args>
+		struct is_invocable<continuation<FN1, FN2>, Args...> : std::is_invocable<FN2, Args...>
+		{};
+
 
 		template <typename FN, typename SFINAE = void>
 		struct parallel_invocation_result_type
@@ -405,7 +431,125 @@ namespace ASYNC_NAMESPACE
 	template <typename FN1>
 	auto disconnect(FN1&& fn1)
 	{
+// workaround for [[maybe_unused]] not working in current version of MSVC
+#ifdef _MSC_VER
+#pragma warning(push)
+#pragma warning(disable : 4100)
 		return then([](auto... v) -> void {}, std::forward<FN1>(fn1));
+#pragma warning(pop)
+#else
+		return then([]([[maybe_unused]] auto... v) -> void {}, std::forward<FN1>(fn1));
+#endif
+	}
+
+	namespace details
+	{
+		template <typename FN1, typename FN2, typename T, typename... Ts, size_t... S1, size_t... S2>
+		auto then_or(FN1&& fn1, FN2&& fn2, std::tuple<T, Ts...>&& result, std::index_sequence<S1...>,
+					 std::index_sequence<S2...>)
+		{
+			if(std::get<0>(result))
+			{
+				if constexpr(details::is_invocable<FN1, T, Ts...>::value)
+				{
+					return compute<execution::wait>(
+						std::forward<FN1>(fn1),
+						std::forward<typename std::tuple_element<S1, std::tuple<T, Ts...>>::type>(
+							std::get<S1>(result))...);
+				}
+				else
+				{
+					return compute<execution::wait>(
+						std::forward<FN1>(fn1),
+						std::forward<typename std::tuple_element<S2, std::tuple<T, Ts...>>::type>(
+							std::get<S2>(result))...);
+				}
+			}
+			else
+			{
+				if constexpr(details::is_invocable<FN2, T, Ts...>::value)
+				{
+					return compute<execution::wait>(
+						std::forward<FN2>(fn2),
+						std::forward<typename std::tuple_element<S1, std::tuple<T, Ts...>>::type>(
+							std::get<S1>(result))...);
+				}
+				else
+				{
+					return compute<execution::wait>(
+						std::forward<FN2>(fn2),
+						std::forward<typename std::tuple_element<S2, std::tuple<T, Ts...>>::type>(
+							std::get<S2>(result))...);
+				}
+			}
+		}
+
+		template <typename FN1, typename FN2, typename... Ts>
+		auto then_or(FN1&& fn1, FN2&& fn2, std::tuple<Ts...>&& result)
+		{
+			return then_or(std::forward<FN1>(fn1), std::forward<FN2>(fn2), std::forward<std::tuple<Ts...>>(result),
+						   details::make_index_sequence<sizeof...(Ts), 0>(),
+						   details::make_index_sequence<sizeof...(Ts) - 1, 1>());
+		}
+
+		template <typename FN1, typename FN2, typename T, typename Y>
+		auto then_or(FN1&& fn1, FN2&& fn2, std::variant<T, Y>&& value)
+		{
+			if(value.index() == 0)
+			{
+				if constexpr(details::is_invocable<FN1, T>::value)
+				{
+					return compute<execution::wait>(std::forward<FN1>(fn1),
+													std::forward<decltype(std::get<0>(value))>(std::get<0>(value)));
+				}
+				else
+				{
+					return compute<execution::wait>(std::forward<FN2>(fn2),
+													std::forward<decltype(std::get<0>(value))>(std::get<0>(value)));
+				}
+			}
+			else
+			{
+				if constexpr(details::is_invocable<FN1, T>::value)
+				{
+					return compute<execution::wait>(std::forward<FN1>(fn1),
+													std::forward<decltype(std::get<1>(value))>(std::get<1>(value)));
+				}
+				else
+				{
+					return compute<execution::wait>(std::forward<FN2>(fn2),
+													std::forward<decltype(std::get<1>(value))>(std::get<1>(value)));
+				}
+			}
+		}
+		template <typename FN1, typename FN2, typename T, typename... Ts>
+		auto then_or(FN1&& fn1, FN2&& fn2, T&& value, Ts&&... result)
+		{
+			if(value)
+			{
+				if constexpr(details::is_invocable<FN1, T, Ts...>::value)
+				{
+					return compute<execution::wait>(std::forward<FN1>(fn1), std::forward<T>(value),
+													std::forward<Ts>(result)...);
+				}
+				else
+				{
+					return compute<execution::wait>(std::forward<FN1>(fn1), std::forward<Ts>(result)...);
+				}
+			}
+			else
+			{
+				if constexpr(details::is_invocable<FN2, T, Ts...>::value)
+				{
+					return compute<execution::wait>(std::forward<FN2>(fn2), std::forward<T>(value),
+													std::forward<Ts>(result)...);
+				}
+				else
+				{
+					return compute<execution::wait>(std::forward<FN2>(fn2), std::forward<Ts>(result)...);
+				}
+			}
+		}
 	}
 
 	/// \brief Complexer then statement that allows a forked behaviour based on the first result.
@@ -418,11 +562,9 @@ namespace ASYNC_NAMESPACE
 	auto then_or(FN1&& fn1, FN2&& fn2, FN3&& fn3)
 	{
 		return then(std::forward<FN1>(fn1),
-					[fn2 = std::forward<FN2>(fn2), fn3 = std::forward<FN3>(fn3)](bool success, auto... values) {
-						if(success)
-							return compute<execution::wait>(fn2, std::forward<decltype(values)>(values)...);
-						else
-							return compute<execution::wait>(fn3, std::forward<decltype(values)>(values)...);
+					[fn2 = std::forward<FN2>(fn2), fn3 = std::forward<FN3>(fn3)](auto... results) mutable {
+						return details::then_or(std::forward<FN2>(fn2), std::forward<FN3>(fn3),
+												std::forward<decltype(results)>(results)...);
 					});
 	}
 
@@ -449,7 +591,7 @@ namespace ASYNC_NAMESPACE
 	template <typename FN1, typename FN2, typename FN3, typename Pred>
 	auto then_or(FN1&& fn1, FN2&& fn2, FN3&& fn3, Pred&& pred)
 	{
-		using R = typename details::get_invocation_type<pred>::type;
+		using R = typename details::get_invocation_type<Pred>::type;
 		static_assert(std::is_same<R, bool>::value || std::is_trivially_constructible<bool, R>::value);
 		return then(std::forward<FN1>(fn1),
 					then_or(std::forward<Pred>(pred), std::forward<FN2>(fn2), std::forward<FN3>(fn3)));
@@ -535,6 +677,11 @@ namespace ASYNC_NAMESPACE
 
 	namespace details
 	{
+		template <typename T, typename F, size_t... S>
+		auto parallel_helper(F&& f, std::index_sequence<S...>)
+		{
+			return std::array<T, sizeof...(S)>{std::move(f[S].get())...};
+		}
 		template <typename... FN>
 		auto parallel(std::tuple<FN...>&& tasks)
 		{
@@ -544,23 +691,19 @@ namespace ASYNC_NAMESPACE
 			if constexpr(details::all_return<result_t, FN...>::value)
 			{
 				return [tasks = std::forward<std::tuple<FN...>>(tasks)]() mutable ->
-					   typename std::conditional<std::is_same<result_t, void>::value, void, std::vector<result_t>>::type
+					   typename std::conditional<std::is_same<result_t, void>::value, void,
+												 std::array<result_t, sizeof...(FN)>>::type
 				{
 					auto futures = std::apply(
 						[](auto&&... task) mutable {
-							std::vector<std::future<result_t>> values;
-							values.reserve(sizeof...(task));
-							(values.emplace_back(compute<execution::async>(task)), ...);
-							return std::move(values);
+							return std::array<std::future<result_t>, sizeof...(task)>{
+								compute<execution::async>(task)...};
 						},
 						std::forward<decltype(tasks)>(tasks));
 
 					if constexpr(!std::is_same<result_t, void>::value)
 					{
-						std::vector<result_t> values;
-						values.reserve(futures.size());
-						for(auto&& value : futures) values.emplace_back(std::move(value.get()));
-						return values;
+						return parallel_helper<result_t>(std::move(futures), std::index_sequence_for<FN...>{});
 					}
 					else
 					{
@@ -572,7 +715,7 @@ namespace ASYNC_NAMESPACE
 			{
 				return [tasks = std::forward<std::tuple<FN...>>(tasks)]() mutable {
 					auto futures = std::move(std::apply(
-						[](auto&&... task) mutable { return std::tuple(compute<execution::async>(task)...); },
+						[](auto&&... task) mutable { return std::make_tuple(compute<execution::async>(task)...); },
 						std::forward<decltype(tasks)>(tasks)));
 
 					using void_types =
@@ -627,6 +770,40 @@ namespace ASYNC_NAMESPACE
 		};
 	}
 
+	template <size_t S, typename FN>
+	auto parallel_n(FN&& task)
+	{
+		using result_t = typename details::parallel_invocation_result_type<FN>::type;
+		return [task = std::forward<FN>(task)]() mutable ->
+			   typename std::conditional<std::is_same<result_t, void>::value, void, std::array<result_t, S>>::type
+		{
+			constexpr bool supports_invocation = std::is_invocable<FN, invocation>::value;
+			std::array<std::future<result_t>, S> futures;
+			auto current_future = std::begin(futures);
+			for(auto i = 0u; i < S; ++i)
+			{
+				if constexpr(supports_invocation)
+				{
+					*current_future = std::move(compute<execution::async>(task, invocation{i, S}));
+				}
+				else
+				{
+					*current_future = std::move(compute<execution::async>(task));
+				}
+				++current_future;
+			}
+
+			if constexpr(!std::is_same<result_t, void>::value)
+			{
+				return details::parallel_helper<result_t>(std::move(futures), std::make_index_sequence<S>{});
+			}
+			else
+			{
+				for(auto&& value : futures) value.get();
+			}
+		};
+	}
+
 	namespace details
 	{
 		template <size_t... S, typename T>
@@ -654,7 +831,7 @@ namespace ASYNC_NAMESPACE
 		return details::into(std::forward_as_tuple(tasks...));
 	}
 
-	template <execution ex = execution::wait, typename Task, typename... Args>
+	template <execution ex, typename Task, typename... Args>
 	auto compute(Task&& task, Args&&... args)
 	{
 		if constexpr(!details::is_continuation<Task>::value)

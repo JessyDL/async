@@ -9,6 +9,7 @@ include(CMakeDependentOption)
 OPTION(ASYNC_TESTS "generate the tests" OFF)
 OPTION(ASYNC_HEADER_ONLY "header-only mode" ON)
 OPTION(ASYNC_NAMESPACE "default namespace to use for the library" "async")
+OPTION(ASYNC_MINIMAL_INCLUDE "will only include what is needed to compile standalone, including the containers (array and vector) is left up to the user" OFF)
 
 set(CMAKE_CXX_EXTENSIONS OFF )
 set(CXX_EXTENSIONS OFF )
