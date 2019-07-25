@@ -236,7 +236,7 @@ void test_parallel1()
 #endif
 }
 
-void test_parallel2()
+void test_parallel()
 {
 #ifdef TEST_THEN
 #ifdef TEST_PARALLEL
@@ -260,10 +260,9 @@ void test_parallel3()
 	assert(result == 10);
 }
 
+// test to see if void values get filtered out or not
 void test_parallel4()
 {
-	std::tuple<int, bool> v;
-
 	auto task   = then(parallel([]() { return 30; }, []() {}, []() { return false; }, []() { return 10; }, []() {}),
 					   [](int v1, bool t, int v2) { return (t) ? v1 : v2; });
 	auto future = compute<execution::async>(task);
@@ -531,7 +530,7 @@ int main()
 	test_into3();
 
 	test_parallel1();
-	test_parallel2();
+	test_parallel();
 	test_parallel3();
 	test_parallel4();
 
