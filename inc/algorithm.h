@@ -560,8 +560,7 @@ namespace ASYNC_NAMESPACE
 					}
 					else
 					{
-						p.set_value(compute<execution::wait>(
-							second, std::invoke(first, std::forward<Args>(args)...)));
+						p.set_value(compute<execution::wait>(second, std::invoke(first, std::forward<Args>(args)...)));
 					}
 				}
 				else
@@ -632,7 +631,14 @@ namespace ASYNC_NAMESPACE
 				using FN1	  = decltype(std::declval<task_t>().first);
 				using FN2	  = decltype(std::declval<task_t>().second);
 				using result_t = typename decltype(_task_result_type_helper<FN1, Args...>())::type;
-				return _task_result_type_helper<FN2, result_t>();
+				if constexpr(std::is_same_v<result_t, void>)
+				{
+					return _task_result_type_helper<FN2>();
+				}
+				else
+				{
+					return _task_result_type_helper<FN2, result_t>();
+				}
 			}
 			else if constexpr(is_parallel_task<task_t>::value)
 			{
@@ -641,8 +647,8 @@ namespace ASYNC_NAMESPACE
 			}
 			else if constexpr(is_repeat_task<task_t>::value)
 			{
-				using FN = decltype(std::declval<task_t>().fn);
-				if constexpr(std::is_invocable<remove_cvref_t<FN>, invocation, Args...>::value)
+				using FN = remove_cvref_t<decltype(std::declval<task_t>().fn)>;
+				if constexpr(std::is_invocable<FN, invocation, Args...>::value)
 				{
 					using result_t = typename decltype(_task_result_type_helper<FN, invocation, Args...>())::type;
 					if constexpr(std::is_same_v<result_t, void>)

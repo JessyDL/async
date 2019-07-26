@@ -428,15 +428,7 @@ void complex_test2()
 		4);
 
 	auto task = then(copy_to_cache, change_data, copy_from_cache, cleanup);
-
-	auto into_task = then(change_data, copy_from_cache);
-	
-	//static_assert(std::is_same_v<void, typename details::task_result_type<decltype(into_task)>::type>);
-
-	details::state_object<void> state;
-	into_task(details::promise<void>{&state});
-
-	/*auto future = compute<execution::async>(task);
+	auto future = compute<execution::async>(task);
 	future.get();
 
 	int expected = 10;
@@ -444,7 +436,7 @@ void complex_test2()
 	{
 		assert(expected == value);
 		++expected;
-	}*/
+	}
 #endif
 #endif
 #endif
@@ -485,7 +477,7 @@ void complex_test3()
 					 },
 					 [cache]() { free(cache); });
 
-	/*auto future = compute<execution::async>(task);
+	auto future = compute<execution::async>(task);
 	future.get();
 
 	int expected = 10;
@@ -493,7 +485,7 @@ void complex_test3()
 	{
 		assert(expected == value);
 		++expected;
-	}*/
+	}
 #endif
 #endif
 #endif
