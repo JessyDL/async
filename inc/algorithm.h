@@ -43,13 +43,24 @@ namespace ASYNC_NAMESPACE
 		class scheduler
 		{
 		  public:
-			template <typename F, typename... Args>
-			auto execute(F&& f, Args&&... args)
+			template <typename F, typename T, typename... Args>
+			auto execute(F&& f, T promise, Args&&... args)
 			{
-				if constexpr(std::is_same<typename details::task_result_type<F, Args...>::type, void>::value)
-					f(std::forward<Args>(args)...);
+				using vT = typename task_result_type<F, Args...>::type;
+				if constexpr(is_task<F>::value)
+				{
+					f(std::move(promise), *this, std::forward<Args>(args)...);
+				}
 				else
-					return f(std::forward<Args>(args)...);
+				{
+					if constexpr(std::is_same_v<vT, void>)
+					{
+						f(std::forward<Args>(args)...);
+						promise.set_value();
+					}
+					else
+					promise.set_value(f(std::forward<Args>(args)...));
+				}
 			}
 
 		  private:
@@ -369,16 +380,15 @@ namespace ASYNC_NAMESPACE
 
 		  public:
 			template <typename T, typename... Args>
-			auto operator()(T&& p, Args&&... args)
+			auto operator()(T&& p, details::scheduler* scheduler, Args&&... args)
 			{
 				using result_t = typename details::task_result_type<std::tuple_element_t<0, std::tuple<FNs...>>>::type;
 				if constexpr(details::all_return2<result_t, type_wrapper<std::tuple<FNs...>>,
 												  type_wrapper<std::tuple<Args...>>>::value)
 				{
 					auto futures = std::apply(
-						[](auto&&... task) mutable {
-							return std::array<std::future<result_t>, sizeof...(task)>{
-								compute<execution::async>(task)...};
+						[scheduler](auto&&... task) mutable {
+							return std::array<std::future<result_t>, sizeof...(task)>{compute(scheduler, task)...};
 						},
 						std::forward<decltype(fns)>(fns));
 
@@ -396,7 +406,7 @@ namespace ASYNC_NAMESPACE
 				else
 				{
 					auto futures = std::move(std::apply(
-						[](auto&&... task) mutable { return std::make_tuple(compute<execution::async>(task)...); },
+						[scheduler](auto&&... task) mutable { return std::make_tuple(compute(scheduler, task)...); },
 						std::forward<decltype(fns)>(fns)));
 
 					using void_types =
@@ -426,7 +436,7 @@ namespace ASYNC_NAMESPACE
 
 		  public:
 			template <typename T, typename... Args>
-			auto operator()(T&& p, Args&&... args)
+			auto operator()(T&& p, details::scheduler* scheduler, Args&&... args)
 			{
 				using result_t = typename details::parallel_invocation_result_type<FN, Args...>::type;
 				constexpr bool supports_invocation = std::is_invocable<FN, invocation, Args...>::value;
@@ -437,13 +447,13 @@ namespace ASYNC_NAMESPACE
 				{
 					if constexpr(supports_invocation)
 					{
-						*current_future = std::move(compute<execution::async>(std::forward<FN>(fn), invocation{i, S},
-																			  std::forward<Args>(args)...));
+						*current_future = std::move(
+							compute(scheduler, std::forward<FN>(fn), invocation{i, S}, std::forward<Args>(args)...));
 					}
 					else
 					{
 						*current_future =
-							std::move(compute<execution::async>(std::forward<FN>(fn), std::forward<Args>(args)...));
+							std::move(compute(scheduler, std::forward<FN>(fn), std::forward<Args>(args)...));
 					}
 					++current_future;
 				}
@@ -468,7 +478,7 @@ namespace ASYNC_NAMESPACE
 		{
 			static constexpr const auto N{0};
 			template <typename T, typename... Args>
-			auto operator()(T&& p, Args&&... args)
+			auto operator()(T&& p, details::scheduler* scheduler, Args&&... args)
 			{
 				using result_t = typename details::parallel_invocation_result_type<FN, Args...>::type;
 				constexpr bool supports_invocation = std::is_invocable<FN, invocation, Args...>::value;
@@ -478,13 +488,13 @@ namespace ASYNC_NAMESPACE
 				{
 					if constexpr(supports_invocation)
 					{
-						futures.emplace_back(std::move(compute<execution::async>(
-							std::forward<FN>(fn), invocation{i, count}, std::forward<Args>(args)...)));
+						futures.emplace_back(std::move(compute(scheduler, std::forward<FN>(fn), invocation{i, count},
+															   std::forward<Args>(args)...)));
 					}
 					else
 					{
 						futures.emplace_back(
-							std::move(compute<execution::async>(std::forward<FN>(fn), std::forward<Args>(args)...)));
+							std::move(compute(scheduler, std::forward<FN>(fn), std::forward<Args>(args)...)));
 					}
 				}
 
@@ -514,33 +524,25 @@ namespace ASYNC_NAMESPACE
 				: first(std::forward<FN1>(fn1)), second(std::forward<FN2>(fn2)){};
 
 			template <typename T, typename... Args>
-			auto operator()(T&& p, Args&&... args)
+			auto operator()(T&& p, details::scheduler* scheduler, Args&&... args)
 			{
 				using result_t = typename task_result_type<FN1, Args...>::type;
 				if constexpr(details::is_task<FN1>::value && details::is_task<FN2>::value)
 				{
+					details::state_object<result_t> state;
+					std::invoke(first, details::promise<result_t>{&state}, scheduler, std::forward<Args>(args)...);
 					if constexpr(std::is_same<result_t, void>::value)
 					{
-						compute<execution::wait>(first, std::forward<Args>(args)...);
-						if constexpr(std::is_same<typename details::promise_type<T>::type, void>::value)
-						{
-							compute<execution::wait>(second);
-							p.set_value();
-						}
-						else
-						{
-							p.set_value(compute<execution::wait>(second));
-						}
+						std::invoke(second, p, scheduler);
 					}
 					else
 					{
-						p.set_value(compute<execution::wait>(
-							second, compute<execution::wait>(first, std::forward<Args>(args)...)));
+						std::invoke(second, p, scheduler, std::get<2>(state.data));
 					}
 				}
 				else if constexpr(details::is_task<FN1>::value)
 				{
-					std::invoke(first, details::promise_wrapper<T, FN2>{std::forward<T>(p), second},
+					std::invoke(first, details::promise_wrapper<T, FN2>{std::forward<T>(p), second}, scheduler,
 								std::forward<Args>(args)...);
 				}
 				else if constexpr(!details::is_task<FN1>::value && details::is_task<FN2>::value)
@@ -548,34 +550,18 @@ namespace ASYNC_NAMESPACE
 					if constexpr(std::is_same<result_t, void>::value)
 					{
 						std::invoke(first, std::forward<Args>(args)...);
-						if constexpr(std::is_same<typename details::promise_type<T>::type, void>::value)
-						{
-							compute<execution::wait>(second);
-							p.set_value();
-						}
-						else
-						{
-							p.set_value(compute<execution::wait>(second));
-						}
+						std::invoke(second, p, scheduler);
 					}
 					else
 					{
-						p.set_value(compute<execution::wait>(second, std::invoke(first, std::forward<Args>(args)...)));
+						std::invoke(second, p, scheduler, std::invoke(first, std::forward<Args>(args)...));
 					}
 				}
 				else
 				{
 					// start of the chain
-					if constexpr(std::is_same<result_t, void>::value)
-					{
-						std::invoke(first, std::forward<Args>(args)...);
-						details::promise_wrapper<T, FN2>{std::forward<T>(p), second}.set_value();
-					}
-					else
-					{
-						details::promise_wrapper<T, FN2>{std::forward<T>(p), second}.set_value(
-							std::invoke(first, std::forward<Args>(args)...));
-					}
+					scheduler->execute(first, details::promise_wrapper<T, FN2>{std::forward<T>(p), second},
+									   std::forward<Args>(args)...);
 				}
 			}
 
@@ -1063,7 +1049,8 @@ namespace ASYNC_NAMESPACE
 			else
 			{
 				details::state_object<T> state;
-				task(details::promise<T>{&state}, std::forward<Args>(args)...);
+				details::scheduler* scheduler = nullptr;
+				task(details::promise<T>{&state}, scheduler, std::forward<Args>(args)...);
 
 				{
 					auto lock = std::unique_lock{state.mutex};
@@ -1078,16 +1065,12 @@ namespace ASYNC_NAMESPACE
 	}
 
 	template <typename Task, typename... Args>
-	auto execute(details::scheduler* scheduler, Task&& task, Args&&... args)
+	auto compute(details::scheduler* scheduler, Task&& task, Args&&... args)
 	{
-		static_assert(details::is_task<Task>::value);
-
 		using T = typename details::task_result_type<Task, Args...>::type;
-		details::state_object<T> state;
-		if constexpr(std::is_same_v<T, void>)
-			scheduler->execute(std::forward<Task>(task), details::promise<T>{&state}, std::forward<Args>(args)...);
-		else
-			return scheduler->execute(std::forward<Task>(task), details::promise<T>{&state},
-									  std::forward<Args>(args)...);
+		std::promise<T> promise;
+		auto future = promise.get_future();
+		scheduler->execute(std::forward<Task>(task), std::move(promise), std::forward<Args>(args)...);
+		return future;
 	}
 } // namespace ASYNC_NAMESPACE
