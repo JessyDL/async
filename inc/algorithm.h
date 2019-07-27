@@ -1,3 +1,5 @@
+#pragma once
+
 #ifndef ASYNC_NAMESPACE
 #define ASYNC_NAMESPACE async
 #endif
@@ -39,8 +41,8 @@ namespace ASYNC_NAMESPACE
 		template <typename FN, typename SFINAE, typename... Args>
 		struct parallel_invocation_result_type;
 
-		template <typename Task, typename... Args>
-		auto compute_unfold(details::scheduler* scheduler, Task&& task, [[maybe_unused]] std::tuple<Args...>&& args);
+		template <typename Task, typename Scheduler, typename... Args>
+		auto compute_unfold(Scheduler* scheduler, Task&& task, [[maybe_unused]] std::tuple<Args...>&& args);
 
 		template <typename FN1, typename FN2>
 		struct continuation;
@@ -62,8 +64,8 @@ namespace ASYNC_NAMESPACE
 		struct promise;
 	} // namespace details
 
-	template <typename Task, typename... Args>
-	auto execute(details::scheduler* scheduler, Task&& task, Args&&... args);
+	template <typename Scheduler, typename Task, typename... Args>
+	auto execute(Scheduler& scheduler, Task&& task, Args&&... args);
 } // namespace ASYNC_NAMESPACE
 
 // helpers and utilities
@@ -86,6 +88,10 @@ namespace ASYNC_NAMESPACE::details
 
 	template <typename T>
 	struct type_wrapper<type_wrapper<T>> : public type_wrapper<T>
+	{};
+
+	template <typename T, typename FN, typename P, typename... Args>
+	struct is_scheduler : std::is_invocable<T, FN, P, Args...>
 	{};
 
 	template <typename T>
@@ -553,8 +559,8 @@ namespace ASYNC_NAMESPACE
 			}
 
 		  public:
-			template <typename T, typename... Args>
-			auto operator()(T&& p, details::scheduler* scheduler, Args&&... args)
+			template <typename T, typename Scheduler, typename... Args>
+			auto operator()(T&& p, Scheduler* scheduler, Args&&... args)
 			{
 				using result_t = typename details::task_result_type<std::tuple_element_t<0, std::tuple<FNs...>>>::type;
 				if constexpr(details::all_return<result_t, type_wrapper<std::tuple<FNs...>>,
@@ -613,8 +619,8 @@ namespace ASYNC_NAMESPACE
 			}
 
 		  public:
-			template <typename T, typename... Args>
-			auto operator()(T&& p, details::scheduler* scheduler, Args&&... args)
+			template <typename T, typename Scheduler, typename... Args>
+			auto operator()(T&& p, Scheduler* scheduler, Args&&... args)
 			{
 				using result_t = typename details::parallel_invocation_result_type<FN, Args...>::type;
 				constexpr bool supports_invocation = std::is_invocable<FN, invocation, Args...>::value;
@@ -655,8 +661,8 @@ namespace ASYNC_NAMESPACE
 		struct repeat_task<FN, 0>
 		{
 			static constexpr const auto N{0};
-			template <typename T, typename... Args>
-			auto operator()(T&& p, details::scheduler* scheduler, Args&&... args)
+			template <typename T, typename Scheduler, typename... Args>
+			auto operator()(T&& p, Scheduler* scheduler, Args&&... args)
 			{
 				using result_t = typename details::parallel_invocation_result_type<FN, Args...>::type;
 				constexpr bool supports_invocation = std::is_invocable<FN, invocation, Args...>::value;
@@ -701,8 +707,8 @@ namespace ASYNC_NAMESPACE
 			constexpr continuation(FN1&& fn1, FN2&& fn2) noexcept
 				: first(std::forward<FN1>(fn1)), second(std::forward<FN2>(fn2)){};
 
-			template <typename T, typename... Args>
-			auto operator()(T&& p, details::scheduler* scheduler, Args&&... args)
+			template <typename T, typename Scheduler, typename... Args>
+			auto operator()(T&& p, Scheduler* scheduler, Args&&... args)
 			{
 				using result_t = typename task_result_type<FN1, Args...>::type;
 				if constexpr(details::is_task<FN1>::value && details::is_task<FN2>::value)
@@ -738,8 +744,16 @@ namespace ASYNC_NAMESPACE
 				else
 				{
 					// start of the chain
-					scheduler->execute(first, details::promise_wrapper<T, FN2>{std::forward<T>(p), second},
-									   std::forward<Args>(args)...);
+					if constexpr(std::is_same<result_t, void>::value)
+					{
+						std::invoke(first, std::forward<Args>(args)...);
+						details::promise_wrapper<T, FN2>{std::forward<T>(p), second}.set_value();
+					}
+					else
+					{
+						details::promise_wrapper<T, FN2>{std::forward<T>(p), second}.set_value(
+							std::invoke(first, std::forward<Args>(args)...));
+					} 
 				}
 			}
 
@@ -747,9 +761,8 @@ namespace ASYNC_NAMESPACE
 			FN2 second;
 		};
 
-		template <typename Task, typename... Args, size_t... S>
-		auto compute_unfold(details::scheduler* scheduler, Task&& task, std::tuple<Args...>&& args,
-							std::index_sequence<S...>)
+		template <typename Task, typename Scheduler, typename... Args, size_t... S>
+		auto compute_unfold(Scheduler* scheduler, Task&& task, std::tuple<Args...>&& args, std::index_sequence<S...>)
 		{
 			using T = typename details::task_result_type<Task, Args...>::type;
 			std::promise<T> promise;
@@ -759,8 +772,8 @@ namespace ASYNC_NAMESPACE
 			return future;
 		}
 
-		template <typename Task, typename... Args>
-		auto compute_unfold(details::scheduler* scheduler, Task&& task, [[maybe_unused]] std::tuple<Args...>&& args)
+		template <typename Task, typename Scheduler, typename... Args>
+		auto compute_unfold(Scheduler* scheduler, Task&& task, [[maybe_unused]] std::tuple<Args...>&& args)
 		{
 			if constexpr(sizeof...(Args) == 0)
 			{
@@ -981,8 +994,8 @@ namespace ASYNC_NAMESPACE
 		return details::into(std::forward_as_tuple(tasks...));
 	}
 
-	template <typename Task, typename... Args>
-	auto execute(details::scheduler* scheduler, Task&& task, Args&&... args)
+	template <typename Scheduler, typename Task, typename... Args>
+	auto execute(Scheduler* scheduler, Task&& task, Args&&... args)
 	{
 		using T = typename details::task_result_type<Task, Args...>::type;
 		std::promise<T> promise;

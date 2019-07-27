@@ -17,6 +17,37 @@ using namespace ASYNC_NAMESPACE;
 #define TEST_PARALLEL
 #define TEST_INTO
 
+class async_scheduler
+{
+  public:
+	template <typename FN, typename P, typename... Args>
+	auto execute(FN&& fn, P p, Args&&... args)
+	{
+		using vT = typename details::task_result_type<FN, Args...>::type;
+		if constexpr(details::is_task<FN>::value)
+		{
+			std::async(
+				[this](auto fn, auto p, auto... args) { fn(std::move(p), this, std::forward<Args>(args)...); },
+				std::forward<FN>(fn), std::forward<P>(p), std::forward<Args>(args)...);
+		}
+		else
+		{
+			if constexpr(std::is_same_v<vT, void>)
+			{
+				std::async(
+					[](auto fn, auto p, auto... args) {
+						fn(std::forward<Args>(args)...);
+						p.set_value();
+					},
+					std::forward<FN>(fn), std::forward<P>(p), std::forward<Args>(args)...);
+			}
+			else
+				std::async([](auto fn, auto p, auto... args) { p.set_value(fn(std::forward<Args>(args)...)); },
+						   std::forward<FN>(fn), std::forward<P>(p), std::forward<Args>(args)...);
+		}
+	}
+};
+
 void test_continuation()
 {
 	auto task   = then([]() { return true; }, [](bool value) { return (value) ? 5 : 0; });
@@ -75,7 +106,8 @@ void test_then2()
 {
 #ifdef TEST_THEN
 	auto task   = then([]() { return true; }, [](bool value) { return (value) ? 5 : 0; });
-	auto future = compute<execution::async>(task);
+	async_scheduler scheduler;
+	auto future = execute(&scheduler, task);
 	auto result = future.get();
 	assert(result == 5);
 #endif
@@ -427,7 +459,7 @@ void complex_test2()
 		},
 		4);
 
-	auto task = then(copy_to_cache, change_data, copy_from_cache, cleanup);
+	auto task   = then(copy_to_cache, change_data, copy_from_cache, cleanup);
 	auto future = compute<execution::async>(task);
 	future.get();
 
@@ -452,30 +484,31 @@ void complex_test3()
 	std::iota(std::begin(data), std::end(data), 0);
 	void* cache = malloc(sizeof(int) * data_count);
 
-	auto task = then(parallel_n(
-						 [cache, &data](invocation invocation) {
-							 size_t count  = data.size() / invocation.count;
-							 size_t offset = count * invocation.index;
-							 void* dst	 = (void*)((int*)(cache) + offset);
-							 std::memcpy(dst, data.data() + offset, sizeof(int) * count);
-						 },
-						 4),
-					 [cache, count = data.size()]() {
-						 int* data_begin = (int*)(cache);
-						 int* data_end   = data_begin + count;
+	auto task = then(
+		parallel_n(
+			[cache, &data](invocation invocation) {
+				size_t count  = data.size() / invocation.count;
+				size_t offset = count * invocation.index;
+				void* dst	 = (void*)((int*)(cache) + offset);
+				std::memcpy(dst, data.data() + offset, sizeof(int) * count);
+			},
+			4),
+		[cache, count = data.size()]() {
+			int* data_begin = (int*)(cache);
+			int* data_end   = data_begin + count;
 
-						 for(auto it = data_begin; it != data_end; ++it) (*it) += 10;
-					 },
-					 [cache, &data]() {
-						 int* it = (int*)(cache);
+			for(auto it = data_begin; it != data_end; ++it) (*it) += 10;
+		},
+		[cache, &data]() {
+			int* it = (int*)(cache);
 
-						 for(auto& value : data)
-						 {
-							 value = (*it);
-							 ++it;
-						 }
-					 },
-					 [cache]() { free(cache); });
+			for(auto& value : data)
+			{
+				value = (*it);
+				++it;
+			}
+		},
+		[cache]() { free(cache); });
 
 	auto future = compute<execution::async>(task);
 	future.get();
