@@ -4,7 +4,7 @@ Async is a small header only utility library to provide functional object chaini
 
 ## Requirements
 
-A C++17 compliant compiler is required due to the usage of `std::variant` and `if constexpr()`. For the rest the library has been tested on CLang 7.0.0 and higher, and MSVC 2019, and GCC 7.1.0.
+A C++17 compliant compiler is required due to the usage of `std::variant` and `if constexpr()`. For the rest the library has been tested on CLang 6.0.0 and higher, MSVC 2019, and GCC 7.1.0.
 
 ## Options
 
@@ -18,7 +18,14 @@ Lastly, tests are not built by default, but can be enabled by passing `-DASYNC_T
 
 ## Customization points
 
-By default the scheduler will spawn a thread for every branching task, this can be improved by providing your own scheduler in the compute signature.
+By default the scheduler will either run on the calling thread, or spawn one async thread for the entire taskchain. This behaviour can be changed by providing your own scheduler-like object in async::execute. The requirement is a singular "execute" method of the following signature:
+```cpp
+template<typename FN, typename Promise, typename... Args>
+void execute(FN&& fn, Promise promise, Args&&... args)
+{ /* spawn threads, or whatever here */ }
+```
+
+An example implementation can be observed in `async::details::scheduler`. Note that you will have to handle the promise yourself, and will either need to pass it along (if `async::details::is_task<FN>::value == true`), or call `set_value(results...)` if it is not a task.
 
 ## API overview
 ### algorithms
@@ -36,16 +43,19 @@ If the previous task returns a tuple, the first element has to be a boolean type
 If the previous task returns a variant, it will check the index to decide which task to invoke.
 
 **parallel**
-The parallel algorithm allows task to run concurrently as they do not depend on eachother. The return value with either be a std::tuple or std::array depending on if all return values are the same or not.
+The parallel algorithm allows task to run concurrently as they do not depend on eachother. The return value with either be a `std::tuple` or `std::array` depending on if all return values are the same or not.
 
 **parallel_n**
-The parallel_n algorithm allows for a single task to be ran N times, this value can both be decided at compile time as well as runtime. The return value depends on if the N count is know at compile time, or known as a runtime value. When known at compile time it will return a std::array<result_type, N>, otherwise it will return a std::vector<result_type>.
+The parallel_n algorithm allows for a single task to be ran N times, this value can both be decided at compile time as well as runtime. The return value depends on if the N count is know at compile time, or known as a runtime value. When known at compile time it will return a `std::array<result_type, N>`, otherwise it will return a `std::vector<result_type>`.
 
 **into**
 The into algorithm is a wrapper around `then(parallel(tasks...), final_task);`.
 
 **compute**
 Accepts any form of invocable, and will compute the results. Depending on the `async::execution` value, this will block or return a `std::future` of the result type.
+
+**execute**
+The first parameter to execute is one that satisfies the requirements for a `scheduler`-like object. See previous section (*customization points*) for what that entails. The remainder is similar to the `compute(...)` function, and behaves similarly with exception that it always returns an `std::future`.
 
 ## Examples
 
