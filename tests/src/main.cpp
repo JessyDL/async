@@ -2,7 +2,7 @@
 #include <stdlib.h>
 #include <crtdbg.h>
 
-#include "algorithm.h"
+#include "async/algorithm.h"
 #include <cassert>
 #include <numeric>
 #include <cstring>
