@@ -1,5 +1,3 @@
-#pragma once
-
 #ifndef ASYNC_NAMESPACE
 #define ASYNC_NAMESPACE async
 #endif
@@ -12,6 +10,8 @@
 #include <vector>
 #include <array>
 #endif
+
+// forward declarations
 namespace ASYNC_NAMESPACE
 {
 	enum class execution
@@ -20,113 +20,27 @@ namespace ASYNC_NAMESPACE
 		wait  = 1
 	};
 
-	template <execution ex = execution::wait, typename Task, typename... Args>
-	auto compute(Task&& task, Args&&... args);
-
 	struct invocation
 	{
 		size_t index{0u};
 		size_t count{0u};
 	};
+
+	template <execution ex = execution::wait, typename Task, typename... Args>
+	auto compute(Task&& task, Args&&... args);
+
 	namespace details
 	{
-		template <typename T>
-		struct remove_cvref
-		{
-			using type = std::remove_reference_t<std::remove_cv_t<T>>;
-		};
+		class scheduler;
 
-		template <typename T>
-		using remove_cvref_t = typename remove_cvref<T>::type;
+		template <typename T, typename... Args>
+		struct task_result_type;
 
-		// scheduler like object
-		class scheduler
-		{
-		  public:
-			template <typename F, typename T, typename... Args>
-			auto execute(F&& f, T promise, Args&&... args)
-			{
-				using vT = typename task_result_type<F, Args...>::type;
-				if constexpr(is_task<F>::value)
-				{
-					f(std::move(promise), *this, std::forward<Args>(args)...);
-				}
-				else
-				{
-					if constexpr(std::is_same_v<vT, void>)
-					{
-						f(std::forward<Args>(args)...);
-						promise.set_value();
-					}
-					else
-					promise.set_value(f(std::forward<Args>(args)...));
-				}
-			}
+		template <typename FN, typename SFINAE, typename... Args>
+		struct parallel_invocation_result_type;
 
-		  private:
-		};
-
-		template <typename... T, std::size_t... I>
-		auto subtuple_(std::tuple<T...>&& t, std::index_sequence<I...>)
-		{
-			return std::make_tuple(std::get<I>(t)...);
-		}
-
-		template <std::size_t O, std::size_t... Is>
-		std::index_sequence<(O + Is)...> add_offset(std::index_sequence<Is...>)
-		{
-			return {};
-		}
-
-		template <std::size_t N, std::size_t O = 0>
-		auto make_index_sequence()
-		{
-			return add_offset<O>(std::make_index_sequence<N>{});
-		}
-
-		template <std::size_t Length, std::size_t Offset, typename... T>
-		auto subtuple(std::tuple<T...>&& t)
-		{
-			static_assert(Length + Offset <= sizeof...(T));
-			if constexpr(sizeof...(T) <= (Offset))
-				return std::tuple<>{};
-			else
-				return subtuple_(std::forward<decltype(t)>(t),
-								 make_index_sequence<sizeof...(T) - (Length + Offset), Offset>());
-		}
-
-		template <unsigned... s, typename Tuple>
-		auto extract_tuple(std::index_sequence<s...>, Tuple& tup)
-		{
-			return std::make_tuple(std::get<s>(tup)...);
-		}
-
-		template <typename T>
-		struct is_tuple : std::false_type
-		{};
-
-		template <typename... Ts>
-		struct is_tuple<std::tuple<Ts...>> : std::true_type
-		{};
-
-		template <typename T>
-		struct is_variant : std::false_type
-		{};
-
-		template <typename... Ts>
-		struct is_variant<std::variant<Ts...>> : std::true_type
-		{};
-
-		template <typename T>
-		struct type_wrapper
-		{
-			using type = T;
-		};
-
-		template <typename T>
-		struct type_wrapper<type_wrapper<T>> : public type_wrapper<T>
-		{};
-
+		template <typename Task, typename... Args>
+		auto compute_unfold(details::scheduler* scheduler, Task&& task, [[maybe_unused]] std::tuple<Args...>&& args);
 
 		template <typename FN1, typename FN2>
 		struct continuation;
@@ -134,7 +48,6 @@ namespace ASYNC_NAMESPACE
 		// each task will be run concurrently
 		template <typename... FNs>
 		struct parallel_task;
-
 
 		// the given task will be repeated N times (decided at compile time using the template parameter)
 		template <typename FN, size_t Count = 0>
@@ -144,74 +57,352 @@ namespace ASYNC_NAMESPACE
 		template <typename FN>
 		struct repeat_task<FN, 0>;
 
-		template <typename T>
-		struct is_continuation : std::false_type
-		{};
-		template <typename FN1, typename FN2>
-		struct is_continuation<continuation<FN1, FN2>> : std::true_type
-		{};
-		template <typename FN1, typename FN2>
-		struct is_continuation<continuation<FN1, FN2>&> : std::true_type
-		{};
-		template <typename FN1, typename FN2>
-		struct is_continuation<const continuation<FN1, FN2>&> : std::true_type
-		{};
-		template <typename FN1, typename FN2>
-
-		struct is_continuation<const continuation<FN1, FN2>> : std::true_type
-		{};
 
 		template <typename T>
-		struct is_parallel_task : std::false_type
-		{};
+		struct promise;
+	} // namespace details
 
-		template <typename... FNs>
-		struct is_parallel_task<parallel_task<FNs...>> : std::true_type
-		{};
+	template <typename Task, typename... Args>
+	auto execute(details::scheduler* scheduler, Task&& task, Args&&... args);
+} // namespace ASYNC_NAMESPACE
+
+// helpers and utilities
+namespace ASYNC_NAMESPACE::details
+{
+	template <typename T>
+	struct remove_cvref
+	{
+		using type = std::remove_reference_t<std::remove_cv_t<T>>;
+	};
+
+	template <typename T>
+	using remove_cvref_t = typename remove_cvref<T>::type;
+
+	template <typename T>
+	struct type_wrapper
+	{
+		using type = T;
+	};
+
+	template <typename T>
+	struct type_wrapper<type_wrapper<T>> : public type_wrapper<T>
+	{};
+
+	template <typename T>
+	struct is_continuation : std::false_type
+	{};
+	template <typename FN1, typename FN2>
+	struct is_continuation<continuation<FN1, FN2>> : std::true_type
+	{};
+	template <typename FN1, typename FN2>
+	struct is_continuation<continuation<FN1, FN2>&> : std::true_type
+	{};
+	template <typename FN1, typename FN2>
+	struct is_continuation<const continuation<FN1, FN2>&> : std::true_type
+	{};
+	template <typename FN1, typename FN2>
+
+	struct is_continuation<const continuation<FN1, FN2>> : std::true_type
+	{};
+
+	template <typename T>
+	struct is_parallel_task : std::false_type
+	{};
+
+	template <typename... FNs>
+	struct is_parallel_task<parallel_task<FNs...>> : std::true_type
+	{};
 
 
-		template <typename... FNs>
-		struct is_parallel_task<const parallel_task<FNs...>> : std::true_type
-		{};
-		template <typename... FNs>
-		struct is_parallel_task<const parallel_task<FNs...>&> : std::true_type
-		{};
-		template <typename... FNs>
-		struct is_parallel_task<parallel_task<FNs...>&> : std::true_type
-		{};
+	template <typename... FNs>
+	struct is_parallel_task<const parallel_task<FNs...>> : std::true_type
+	{};
+	template <typename... FNs>
+	struct is_parallel_task<const parallel_task<FNs...>&> : std::true_type
+	{};
+	template <typename... FNs>
+	struct is_parallel_task<parallel_task<FNs...>&> : std::true_type
+	{};
 
-		template <typename T>
-		struct is_repeat_task : std::false_type
-		{};
+	template <typename T>
+	struct is_repeat_task : std::false_type
+	{};
 
-		template <typename FN, size_t C>
-		struct is_repeat_task<repeat_task<FN, C>> : std::true_type
-		{};
+	template <typename FN, size_t C>
+	struct is_repeat_task<repeat_task<FN, C>> : std::true_type
+	{};
 
-		template <typename FN, size_t C>
-		struct is_repeat_task<const repeat_task<FN, C>> : std::true_type
-		{};
+	template <typename FN, size_t C>
+	struct is_repeat_task<const repeat_task<FN, C>> : std::true_type
+	{};
 
-		template <typename FN, size_t C>
-		struct is_repeat_task<repeat_task<FN, C>&> : std::true_type
-		{};
+	template <typename FN, size_t C>
+	struct is_repeat_task<repeat_task<FN, C>&> : std::true_type
+	{};
 
-		template <typename FN, size_t C>
-		struct is_repeat_task<const repeat_task<FN, C>&> : std::true_type
-		{};
+	template <typename FN, size_t C>
+	struct is_repeat_task<const repeat_task<FN, C>&> : std::true_type
+	{};
 
-		template <typename T>
-		struct is_dynamic_repeat_task : std::bool_constant<T::N == 0>
+	template <typename T>
+	struct is_dynamic_repeat_task : std::bool_constant<T::N == 0>
+	{
+		static const size_t count = T::N;
+	};
+
+	template <typename T>
+	struct is_task
+		: std::bool_constant<is_continuation<remove_cvref_t<T>>::value || is_parallel_task<remove_cvref_t<T>>::value ||
+							 is_repeat_task<remove_cvref_t<T>>::value>
+	{};
+
+
+	template <typename T, typename F, typename N>
+	struct all_return : std::false_type
+	{};
+
+	template <typename T, typename... FN, typename... Args>
+	struct all_return<T, type_wrapper<std::tuple<FN...>>, type_wrapper<std::tuple<Args...>>>
+		: std::bool_constant<(std::is_same<T, typename details::task_result_type<FN, Args...>::type>{} && ...)>
+	{};
+
+	// specialized invoke version that throws away the first arg in case of void, and applies std::tuple if it's the
+	// first arg
+	template <typename Fn, typename... Args>
+	struct invoke_result : public std::invoke_result<Fn, Args...>
+	{};
+
+	template <typename Fn>
+	struct invoke_result<Fn, void> : public std::invoke_result<Fn>
+	{};
+	template <typename Fn, typename... Args>
+	struct invoke_result<Fn, std::tuple<Args...>> : public std::invoke_result<Fn, Args...>
+	{};
+
+	template <typename Fn, typename... Args>
+	using invoke_result_t = typename invoke_result<Fn, Args...>::type;
+
+
+	template <std::size_t O, std::size_t... Is>
+	std::index_sequence<(O + Is)...> add_offset(std::index_sequence<Is...>)
+	{
+		return {};
+	}
+
+	template <std::size_t N, std::size_t O = 0>
+	auto make_index_sequence()
+	{
+		return add_offset<O>(std::make_index_sequence<N>{});
+	}
+
+	// machinery to make an index sequence of a tuple that filters out the given type (match), or that makes a tuple
+	// with only the given type (mismatch)
+	template <size_t... first, size_t... second>
+	constexpr std::index_sequence<first..., second...> append(std::index_sequence<first...>,
+															  std::index_sequence<second...>)
+	{
+		return {};
+	}
+
+	template <typename P, size_t Current, typename T, typename Tu, typename SFINEA = void>
+	struct match
+	{
+		using type = P;
+	};
+
+	template <size_t... S, size_t Current, typename T, typename Y, typename... Args>
+	struct match<std::index_sequence<S...>, Current, T, std::tuple<Y, Args...>,
+				 std::enable_if_t<!std::is_same<T, Y>::value>>
+		: match<decltype(append(std::index_sequence<S...>{}, std::index_sequence<Current>{})), Current + 1, T,
+				std::tuple<Args...>>
+	{};
+	template <size_t... S, size_t Current, typename T, typename Y, typename... Args>
+	struct match<std::index_sequence<S...>, Current, T, std::tuple<Y, Args...>,
+				 std::enable_if_t<std::is_same<T, Y>::value>>
+		: match<std::index_sequence<S...>, Current + 1, T, std::tuple<Args...>>
+	{};
+
+	template <typename P, size_t Current, typename T, typename Tu, typename SFINEA = void>
+	struct mismatch
+	{
+		using type = P;
+	};
+
+	template <size_t... S, size_t Current, typename T, typename Y, typename... Args>
+	struct mismatch<std::index_sequence<S...>, Current, T, std::tuple<Y, Args...>,
+					std::enable_if_t<std::is_same<T, Y>::value>>
+		: mismatch<decltype(append(std::index_sequence<S...>{}, std::index_sequence<Current>{})), Current + 1, T,
+				   std::tuple<Args...>>
+	{};
+	template <size_t... S, size_t Current, typename T, typename Y, typename... Args>
+	struct mismatch<std::index_sequence<S...>, Current, T, std::tuple<Y, Args...>,
+					std::enable_if_t<!std::is_same<T, Y>::value>>
+		: mismatch<std::index_sequence<S...>, Current + 1, T, std::tuple<Args...>>
+	{};
+
+	template <typename T, typename U>
+	struct make_index_sequence_match
+	{};
+
+	template <typename T, typename... Args>
+	struct make_index_sequence_match<T, std::tuple<Args...>> : match<std::index_sequence<>, 0, T, std::tuple<Args...>>
+	{};
+
+	template <typename T, typename U>
+	struct make_index_sequence_mismatch
+	{};
+
+	template <typename T, typename... Args>
+	struct make_index_sequence_mismatch<T, std::tuple<Args...>>
+		: mismatch<std::index_sequence<>, 0, T, std::tuple<Args...>>
+	{};
+
+	/// \details helper to unfold a tuple of future<T>, forcing the void returns to complete (S1), and returning those
+	/// that have non-void types in a tuple (S2)
+	template <size_t... S1, size_t... S2, typename F>
+	auto get(std::index_sequence<S1...>, std::index_sequence<S2...>, F&& f)
+	{
+		(void(std::get<S1>(f).get()), ...);
+		return std::tuple(std::move(std::get<S2>(f).get())...);
+	}
+
+	template <typename T, typename S>
+	struct _task_parallel_result_type_helper2
+	{};
+
+	template <typename T, size_t... S>
+	struct _task_parallel_result_type_helper2<type_wrapper<T>, std::index_sequence<S...>>
+	{
+		using type = std::tuple<typename std::tuple_element<S, T>::type...>;
+	};
+
+	template <typename T, typename... Args>
+	auto _task_result_type_helper();
+
+	template <typename... FNs, typename... Args>
+	auto _task_parallel_result_type_helper(type_wrapper<std::tuple<FNs...>>, type_wrapper<std::tuple<Args...>>)
+	{
+		using result_t =
+			typename decltype(_task_result_type_helper<std::tuple_element_t<0, std::tuple<FNs...>>, Args...>())::type;
+		if constexpr(details::all_return<result_t, type_wrapper<std::tuple<FNs...>>,
+										 type_wrapper<std::tuple<Args...>>>::value)
 		{
-			static const size_t count = T::N;
-		};
+			if constexpr(std::is_same_v<void, result_t>)
+				return type_wrapper<void>{};
+			else
+				return type_wrapper<std::array<result_t, sizeof...(FNs)>>{};
+		}
+		else
+		{
+			// todo possible error here in pack expansion
+			using functions  = std::tuple<typename details::task_result_type<FNs, Args...>::type...>;
+			using real_types = typename details::make_index_sequence_match<void, functions>::type;
+			return type_wrapper<
+				typename _task_parallel_result_type_helper2<type_wrapper<functions>, real_types>::type>{};
+		}
+	}
 
-		template <typename T>
-		struct is_task
-			: std::bool_constant<is_continuation<remove_cvref_t<T>>::value ||
-								 is_parallel_task<remove_cvref_t<T>>::value || is_repeat_task<remove_cvref_t<T>>::value>
-		{};
+	template <typename T, typename... Args>
+	auto _task_result_type_helper()
+	{
+		using task_t = details::remove_cvref_t<T>;
+		if constexpr(is_continuation<task_t>::value)
+		{
+			using FN1	  = decltype(std::declval<task_t>().first);
+			using FN2	  = decltype(std::declval<task_t>().second);
+			using result_t = typename decltype(_task_result_type_helper<FN1, Args...>())::type;
+			if constexpr(std::is_same_v<result_t, void>)
+			{
+				return _task_result_type_helper<FN2>();
+			}
+			else
+			{
+				return _task_result_type_helper<FN2, result_t>();
+			}
+		}
+		else if constexpr(is_parallel_task<task_t>::value)
+		{
+			using FNs = decltype(std::declval<task_t>().fns);
+			return _task_parallel_result_type_helper(type_wrapper<FNs>{}, type_wrapper<std::tuple<Args...>>{});
+		}
+		else if constexpr(is_repeat_task<task_t>::value)
+		{
+			using FN = remove_cvref_t<decltype(std::declval<task_t>().fn)>;
+			if constexpr(std::is_invocable<FN, invocation, Args...>::value)
+			{
+				using result_t = typename decltype(_task_result_type_helper<FN, invocation, Args...>())::type;
+				if constexpr(std::is_same_v<result_t, void>)
+				{
+					return type_wrapper<void>{};
+				}
+				else if constexpr(is_dynamic_repeat_task<task_t>::value)
+				{
+					return type_wrapper<std::vector<result_t>>{};
+				}
+				else
+				{
+					constexpr auto count = is_dynamic_repeat_task<task_t>::count;
+					return type_wrapper<std::array<result_t, count>>{};
+				}
+			}
+			else
+			{
+				using result_t = typename decltype(_task_result_type_helper<FN, Args...>())::type;
+				if constexpr(std::is_same_v<result_t, void>)
+				{
+					return type_wrapper<void>{};
+				}
+				else if constexpr(is_dynamic_repeat_task<task_t>::value)
+				{
+					return type_wrapper<std::vector<result_t>>{};
+				}
+				else
+				{
+					constexpr auto count = is_dynamic_repeat_task<task_t>::count;
+					return type_wrapper<std::array<result_t, count>>{};
+				}
+			}
+		}
+		else
+		{
+			return type_wrapper<invoke_result_t<task_t, Args...>>{};
+		}
+	}
 
+	template <typename T, typename... Args>
+	struct task_result_type
+	{
+		using type = typename decltype(_task_result_type_helper<remove_cvref_t<T>, Args...>())::type;
+	};
+
+	template <typename T, typename... Args>
+	struct is_invocable : std::is_invocable<T, Args...>
+	{};
+
+	template <typename FN1, typename FN2, typename... Args>
+	struct is_invocable<continuation<FN1, FN2>, Args...> : std::is_invocable<FN2, Args...>
+	{};
+
+
+	template <typename FN, typename SFINAE = void, typename... Args>
+	struct parallel_invocation_result_type
+	{
+		using type = typename task_result_type<FN, Args...>::type;
+	};
+
+	template <typename FN, typename... Args>
+	struct parallel_invocation_result_type<
+		FN, typename std::enable_if<std::is_invocable<FN, Args..., invocation>::value>::type, Args...>
+	{
+		using type = typename task_result_type<FN, invocation, Args...>::type;
+	};
+} // namespace ASYNC_NAMESPACE::details
+
+
+namespace ASYNC_NAMESPACE
+{
+	namespace details
+	{
 		template <typename T>
 		struct state_object
 		{
@@ -260,50 +451,11 @@ namespace ASYNC_NAMESPACE
 			}
 		};
 
-		template <typename T>
-		struct promise_type
-		{
-			using type = T;
-		};
-		template <typename T>
-		struct promise_type<std::promise<T>>
-		{
-			using type = T;
-		};
-		template <typename T>
-		struct promise_type<details::promise<T>>
-		{
-			using type = T;
-		};
-
-		// specialized invoke version that throws away the first arg in case of void, and applies std::tuple if it's the
-		// first arg
-		template <typename Fn, typename... Args>
-		struct invoke_result : public std::invoke_result<Fn, Args...>
-		{};
-
-		template <typename Fn>
-		struct invoke_result<Fn, void> : public std::invoke_result<Fn>
-		{};
-		template <typename Fn, typename... Args>
-		struct invoke_result<Fn, std::tuple<Args...>> : public std::invoke_result<Fn, Args...>
-		{};
-
-		template <typename Fn, typename... Args>
-		using invoke_result_t = typename invoke_result<Fn, Args...>::type;
-
-
 		template <typename param_t, typename fn_t>
 		struct promise_wrapper
 		{
 			param_t param;
 			fn_t func;
-			/*details::scheduler* scheduler;
-
-			void spawn()
-			{
-				scheduler->start_work(*this);
-			}*/
 
 			template <typename... Args>
 			auto set_value(Args&&... args)
@@ -342,9 +494,31 @@ namespace ASYNC_NAMESPACE
 				param.set_exception(std::forward<T>(e));
 			}
 		};
-		template <typename param_t, typename fn_t>
-		struct promise_type<promise_wrapper<param_t, fn_t>> : public promise_type<param_t>
-		{};
+
+		// scheduler like object
+		class scheduler
+		{
+		  public:
+			template <typename F, typename T, typename... Args>
+			auto execute(F&& f, T promise, Args&&... args)
+			{
+				using vT = typename task_result_type<F, Args...>::type;
+				if constexpr(is_task<F>::value)
+				{
+					f(std::move(promise), *this, std::forward<Args>(args)...);
+				}
+				else
+				{
+					if constexpr(std::is_same_v<vT, void>)
+					{
+						f(std::forward<Args>(args)...);
+						promise.set_value();
+					}
+					else
+						promise.set_value(f(std::forward<Args>(args)...));
+				}
+			}
+		};
 
 		template <typename... FNs>
 		struct parallel_task
@@ -383,12 +557,13 @@ namespace ASYNC_NAMESPACE
 			auto operator()(T&& p, details::scheduler* scheduler, Args&&... args)
 			{
 				using result_t = typename details::task_result_type<std::tuple_element_t<0, std::tuple<FNs...>>>::type;
-				if constexpr(details::all_return2<result_t, type_wrapper<std::tuple<FNs...>>,
-												  type_wrapper<std::tuple<Args...>>>::value)
+				if constexpr(details::all_return<result_t, type_wrapper<std::tuple<FNs...>>,
+												 type_wrapper<std::tuple<Args...>>>::value)
 				{
 					auto futures = std::apply(
-						[scheduler](auto&&... task) mutable {
-							return std::array<std::future<result_t>, sizeof...(task)>{compute(scheduler, task)...};
+						[scheduler, arg_pack = std::forward_as_tuple(args...)](auto&&... task) mutable {
+							return std::array<std::future<result_t>, sizeof...(task)>{
+								compute_unfold(scheduler, task, std::forward<decltype(arg_pack)>(arg_pack))...};
 						},
 						std::forward<decltype(fns)>(fns));
 
@@ -406,7 +581,10 @@ namespace ASYNC_NAMESPACE
 				else
 				{
 					auto futures = std::move(std::apply(
-						[scheduler](auto&&... task) mutable { return std::make_tuple(compute(scheduler, task)...); },
+						[scheduler, arg_pack = std::forward_as_tuple(args...)](auto&&... task) mutable {
+							return std::make_tuple(
+								compute_unfold(scheduler, task, std::forward<decltype(arg_pack)>(arg_pack))...);
+						},
 						std::forward<decltype(fns)>(fns)));
 
 					using void_types =
@@ -448,12 +626,12 @@ namespace ASYNC_NAMESPACE
 					if constexpr(supports_invocation)
 					{
 						*current_future = std::move(
-							compute(scheduler, std::forward<FN>(fn), invocation{i, S}, std::forward<Args>(args)...));
+							execute(scheduler, std::forward<FN>(fn), invocation{i, N}, std::forward<Args>(args)...));
 					}
 					else
 					{
 						*current_future =
-							std::move(compute(scheduler, std::forward<FN>(fn), std::forward<Args>(args)...));
+							std::move(execute(scheduler, std::forward<FN>(fn), std::forward<Args>(args)...));
 					}
 					++current_future;
 				}
@@ -488,13 +666,13 @@ namespace ASYNC_NAMESPACE
 				{
 					if constexpr(supports_invocation)
 					{
-						futures.emplace_back(std::move(compute(scheduler, std::forward<FN>(fn), invocation{i, count},
+						futures.emplace_back(std::move(execute(scheduler, std::forward<FN>(fn), invocation{i, count},
 															   std::forward<Args>(args)...)));
 					}
 					else
 					{
 						futures.emplace_back(
-							std::move(compute(scheduler, std::forward<FN>(fn), std::forward<Args>(args)...)));
+							std::move(execute(scheduler, std::forward<FN>(fn), std::forward<Args>(args)...)));
 					}
 				}
 
@@ -569,139 +747,35 @@ namespace ASYNC_NAMESPACE
 			FN2 second;
 		};
 
-
-		// static_assert(std::is_same_v<std::index_sequence<S...>, std::index_sequence<1, 4>>);
-		// using filtered_tuple = std::tuple<typename std::tuple_element<S, T>::type...>;
-		// return type_wrapper<std::tuple<typename std::tuple_element<S, T>::type...>>{};
-
-
-		template <typename T, typename S>
-		struct _task_parallel_result_type_helper2
-		{};
-
-		template <typename T, size_t... S>
-		struct _task_parallel_result_type_helper2<type_wrapper<T>, std::index_sequence<S...>>
+		template <typename Task, typename... Args, size_t... S>
+		auto compute_unfold(details::scheduler* scheduler, Task&& task, std::tuple<Args...>&& args,
+							std::index_sequence<S...>)
 		{
-			using type = std::tuple<typename std::tuple_element<S, T>::type...>;
-		};
+			using T = typename details::task_result_type<Task, Args...>::type;
+			std::promise<T> promise;
+			auto future = promise.get_future();
+			scheduler->execute(std::forward<Task>(task), std::move(promise),
+							   std::forward<std::tuple_element_t<S, std::tuple<Args...>>>(std::get<S>(args))...);
+			return future;
+		}
 
-		template <typename... FNs, typename... Args>
-		auto _task_parallel_result_type_helper(type_wrapper<std::tuple<FNs...>>, type_wrapper<std::tuple<Args...>>)
+		template <typename Task, typename... Args>
+		auto compute_unfold(details::scheduler* scheduler, Task&& task, [[maybe_unused]] std::tuple<Args...>&& args)
 		{
-			using result_t = typename decltype(
-				_task_result_type_helper<std::tuple_element_t<0, std::tuple<FNs...>>, Args...>())::type;
-			if constexpr(details::all_return2<result_t, type_wrapper<std::tuple<FNs...>>,
-											  type_wrapper<std::tuple<Args...>>>::value)
+			if constexpr(sizeof...(Args) == 0)
 			{
-				if constexpr(std::is_same_v<void, result_t>)
-					return type_wrapper<void>{};
-				else
-					return type_wrapper<std::array<result_t, sizeof...(FNs)>>{};
+				using T = typename details::task_result_type<Task>::type;
+				std::promise<T> promise;
+				auto future = promise.get_future();
+				scheduler->execute(std::forward<Task>(task), std::move(promise));
+				return future;
 			}
 			else
 			{
-				// todo possible error here in pack expansion
-				using functions  = std::tuple<typename details::task_result_type<FNs, Args...>::type...>;
-				using real_types = typename details::make_index_sequence_match<void, functions>::type;
-				return type_wrapper<
-					typename _task_parallel_result_type_helper2<type_wrapper<functions>, real_types>::type>{};
+				return compute_unfold(scheduler, std::forward<Task>(task), std::forward<std::tuple<Args...>>(args),
+									  std::make_index_sequence<sizeof...(Args)>{});
 			}
 		}
-
-		template <typename T, typename... Args>
-		auto _task_result_type_helper()
-		{
-			using task_t = details::remove_cvref_t<T>;
-			if constexpr(is_continuation<task_t>::value)
-			{
-				using FN1	  = decltype(std::declval<task_t>().first);
-				using FN2	  = decltype(std::declval<task_t>().second);
-				using result_t = typename decltype(_task_result_type_helper<FN1, Args...>())::type;
-				if constexpr(std::is_same_v<result_t, void>)
-				{
-					return _task_result_type_helper<FN2>();
-				}
-				else
-				{
-					return _task_result_type_helper<FN2, result_t>();
-				}
-			}
-			else if constexpr(is_parallel_task<task_t>::value)
-			{
-				using FNs = decltype(std::declval<task_t>().fns);
-				return _task_parallel_result_type_helper(type_wrapper<FNs>{}, type_wrapper<std::tuple<Args...>>{});
-			}
-			else if constexpr(is_repeat_task<task_t>::value)
-			{
-				using FN = remove_cvref_t<decltype(std::declval<task_t>().fn)>;
-				if constexpr(std::is_invocable<FN, invocation, Args...>::value)
-				{
-					using result_t = typename decltype(_task_result_type_helper<FN, invocation, Args...>())::type;
-					if constexpr(std::is_same_v<result_t, void>)
-					{
-						return type_wrapper<void>{};
-					}
-					else if constexpr(is_dynamic_repeat_task<task_t>::value)
-					{
-						return type_wrapper<std::vector<result_t>>{};
-					}
-					else
-					{
-						constexpr auto count = is_dynamic_repeat_task<task_t>::count;
-						return type_wrapper<std::array<result_t, count>>{};
-					}
-				}
-				else
-				{
-					using result_t = typename decltype(_task_result_type_helper<FN, Args...>())::type;
-					if constexpr(std::is_same_v<result_t, void>)
-					{
-						return type_wrapper<void>{};
-					}
-					else if constexpr(is_dynamic_repeat_task<task_t>::value)
-					{
-						return type_wrapper<std::vector<result_t>>{};
-					}
-					else
-					{
-						constexpr auto count = is_dynamic_repeat_task<task_t>::count;
-						return type_wrapper<std::array<result_t, count>>{};
-					}
-				}
-			}
-			else
-			{
-				return type_wrapper<invoke_result_t<task_t, Args...>>{};
-			}
-		}
-
-		template <typename T, typename... Args>
-		struct task_result_type
-		{
-			using type = typename decltype(_task_result_type_helper<remove_cvref_t<T>, Args...>())::type;
-		};
-
-		template <typename T, typename... Args>
-		struct is_invocable : std::is_invocable<T, Args...>
-		{};
-
-		template <typename FN1, typename FN2, typename... Args>
-		struct is_invocable<continuation<FN1, FN2>, Args...> : std::is_invocable<FN2, Args...>
-		{};
-
-
-		template <typename FN, typename SFINAE = void, typename... Args>
-		struct parallel_invocation_result_type
-		{
-			using type = typename task_result_type<FN, Args...>::type;
-		};
-
-		template <typename FN, typename... Args>
-		struct parallel_invocation_result_type<
-			FN, typename std::enable_if<std::is_invocable<FN, Args..., invocation>::value>::type, Args...>
-		{
-			using type = typename task_result_type<FN, invocation, Args...>::type;
-		};
 	} // namespace details
 
 	template <typename FN1, typename FN2>
@@ -862,101 +936,6 @@ namespace ASYNC_NAMESPACE
 					then_or(std::forward<Pred>(pred), std::forward<FN2>(fn2), std::forward<FN3>(fn3)));
 	}
 
-	namespace details
-	{
-		template <typename T, typename... FN>
-		struct all_return : std::bool_constant<(std::is_same<T, typename details::task_result_type<FN>::type>{} && ...)>
-		{};
-
-		template <typename T, typename F, typename N>
-		struct all_return2 : std::false_type
-		{};
-
-		template <typename T, typename... FN, typename... Args>
-		struct all_return2<T, type_wrapper<std::tuple<FN...>>, type_wrapper<std::tuple<Args...>>>
-			: std::bool_constant<(std::is_same<T, typename details::task_result_type<FN, Args...>::type>{} && ...)>
-		{};
-
-		// machinery to make an index sequence of a tuple that filters out the given type (match), or that makes a tuple
-		// with only the given type (mismatch)
-		template <size_t... first, size_t... second>
-		constexpr std::index_sequence<first..., second...> append(std::index_sequence<first...>,
-																  std::index_sequence<second...>)
-		{
-			return {};
-		}
-
-		template <typename P, size_t Current, typename T, typename Tu, typename SFINEA = void>
-		struct match
-		{
-			using type = P;
-		};
-
-		template <size_t... S, size_t Current, typename T, typename Y, typename... Args>
-		struct match<std::index_sequence<S...>, Current, T, std::tuple<Y, Args...>,
-					 std::enable_if_t<!std::is_same<T, Y>::value>>
-			: match<decltype(append(std::index_sequence<S...>{}, std::index_sequence<Current>{})), Current + 1, T,
-					std::tuple<Args...>>
-		{};
-		template <size_t... S, size_t Current, typename T, typename Y, typename... Args>
-		struct match<std::index_sequence<S...>, Current, T, std::tuple<Y, Args...>,
-					 std::enable_if_t<std::is_same<T, Y>::value>>
-			: match<std::index_sequence<S...>, Current + 1, T, std::tuple<Args...>>
-		{};
-
-		template <typename P, size_t Current, typename T, typename Tu, typename SFINEA = void>
-		struct mismatch
-		{
-			using type = P;
-		};
-
-		template <size_t... S, size_t Current, typename T, typename Y, typename... Args>
-		struct mismatch<std::index_sequence<S...>, Current, T, std::tuple<Y, Args...>,
-						std::enable_if_t<std::is_same<T, Y>::value>>
-			: mismatch<decltype(append(std::index_sequence<S...>{}, std::index_sequence<Current>{})), Current + 1, T,
-					   std::tuple<Args...>>
-		{};
-		template <size_t... S, size_t Current, typename T, typename Y, typename... Args>
-		struct mismatch<std::index_sequence<S...>, Current, T, std::tuple<Y, Args...>,
-						std::enable_if_t<!std::is_same<T, Y>::value>>
-			: mismatch<std::index_sequence<S...>, Current + 1, T, std::tuple<Args...>>
-		{};
-
-		template <typename T, typename U>
-		struct make_index_sequence_match
-		{};
-
-		template <typename T, typename... Args>
-		struct make_index_sequence_match<T, std::tuple<Args...>>
-			: match<std::index_sequence<>, 0, T, std::tuple<Args...>>
-		{};
-
-		template <typename T, typename U>
-		struct make_index_sequence_mismatch
-		{};
-
-		template <typename T, typename... Args>
-		struct make_index_sequence_mismatch<T, std::tuple<Args...>>
-			: mismatch<std::index_sequence<>, 0, T, std::tuple<Args...>>
-		{};
-
-		template <size_t... S1, size_t... S2, typename F>
-		auto get(std::index_sequence<S1...>, std::index_sequence<S2...>, F&& f)
-		{
-			(void(std::get<S1>(f).get()), ...);
-			return std::tuple(std::move(std::get<S2>(f).get())...);
-		}
-	} // namespace details
-
-	namespace details
-	{
-		template <typename T, typename F, size_t... S>
-		auto parallel_helper(F&& f, std::index_sequence<S...>)
-		{
-			return std::array<T, sizeof...(S)>{std::move(f[S].get())...};
-		}
-	} // namespace details
-
 	template <typename... FN>
 	auto parallel(FN&&... tasks)
 	{
@@ -1000,6 +979,16 @@ namespace ASYNC_NAMESPACE
 	auto into(FNn&&... tasks)
 	{
 		return details::into(std::forward_as_tuple(tasks...));
+	}
+
+	template <typename Task, typename... Args>
+	auto execute(details::scheduler* scheduler, Task&& task, Args&&... args)
+	{
+		using T = typename details::task_result_type<Task, Args...>::type;
+		std::promise<T> promise;
+		auto future = promise.get_future();
+		scheduler->execute(std::forward<Task>(task), std::move(promise), std::forward<Args>(args)...);
+		return future;
 	}
 
 	template <execution ex, typename Task, typename... Args>
@@ -1062,15 +1051,5 @@ namespace ASYNC_NAMESPACE
 				if constexpr(!std::is_same<T, void>::value) return std::move(std::get<2>(state.data));
 			}
 		}
-	}
-
-	template <typename Task, typename... Args>
-	auto compute(details::scheduler* scheduler, Task&& task, Args&&... args)
-	{
-		using T = typename details::task_result_type<Task, Args...>::type;
-		std::promise<T> promise;
-		auto future = promise.get_future();
-		scheduler->execute(std::forward<Task>(task), std::move(promise), std::forward<Args>(args)...);
-		return future;
 	}
 } // namespace ASYNC_NAMESPACE
