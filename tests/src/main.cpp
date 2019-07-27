@@ -107,7 +107,7 @@ void test_then2()
 #ifdef TEST_THEN
 	auto task   = then([]() { return true; }, [](bool value) { return (value) ? 5 : 0; });
 	async_scheduler scheduler;
-	auto future = execute(&scheduler, task);
+	auto future = execute(scheduler, task);
 	auto result = future.get();
 	assert(result == 5);
 #endif
