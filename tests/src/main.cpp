@@ -26,7 +26,7 @@ class async_scheduler
 		using vT = typename details::task_result_type<FN, Args...>::type;
 		if constexpr(details::is_task<FN>::value)
 		{
-			std::async(
+			auto res = std::async(
 				[this](auto fn, auto p, auto... args) { fn(std::move(p), this, std::forward<Args>(args)...); },
 				std::forward<FN>(fn), std::forward<P>(p), std::forward<Args>(args)...);
 		}
@@ -34,7 +34,7 @@ class async_scheduler
 		{
 			if constexpr(std::is_same_v<vT, void>)
 			{
-				std::async(
+				auto res = std::async(
 					[](auto fn, auto p, auto... args) {
 						fn(std::forward<Args>(args)...);
 						p.set_value();
@@ -42,7 +42,8 @@ class async_scheduler
 					std::forward<FN>(fn), std::forward<P>(p), std::forward<Args>(args)...);
 			}
 			else
-				std::async([](auto fn, auto p, auto... args) { p.set_value(fn(std::forward<Args>(args)...)); },
+				auto res =
+					std::async([](auto fn, auto p, auto... args) { p.set_value(fn(std::forward<Args>(args)...)); },
 						   std::forward<FN>(fn), std::forward<P>(p), std::forward<Args>(args)...);
 		}
 	}
@@ -331,6 +332,22 @@ void test_parallel_n2()
 #endif
 }
 
+void test_parallel_n3() 
+{
+	auto seed	= []() { return 1; };
+
+	auto amplifier = parallel_n([](int seed) { return seed * 10; }, 10);
+
+	auto merge	 = [](std::vector<int> values) {
+		return std::accumulate(std::begin(values), std::end(values), 0, [](int sum, int value) { return sum + value; });
+	};
+
+	auto task = then(seed, amplifier, merge);
+
+	auto result = compute(task);
+	assert(result == 100);
+}
+
 void test_disconnected_then1()
 {
 #ifdef TEST_THEN
@@ -568,6 +585,7 @@ int main()
 
 	test_parallel_n1();
 	test_parallel_n2();
+	test_parallel_n3();
 
 	test_disconnected_then1();
 	test_disconnected_then2();

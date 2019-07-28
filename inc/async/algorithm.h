@@ -38,7 +38,7 @@ namespace ASYNC_NAMESPACE
 		template <typename T, typename... Args>
 		struct task_result_type;
 
-		template <typename FN, typename SFINAE, typename... Args>
+		template <typename FN, typename... Args>
 		struct parallel_invocation_result_type;
 
 		template <typename Task, typename Scheduler, typename... Args>
@@ -387,17 +387,23 @@ namespace ASYNC_NAMESPACE::details
 	{};
 
 
-	template <typename FN, typename SFINAE = void, typename... Args>
-	struct parallel_invocation_result_type
+	template <typename FN, typename... Args>
+	auto parallel_invocation_result_type_impl()
 	{
-		using type = typename task_result_type<FN, Args...>::type;
-	};
+		if constexpr(std::is_invocable<FN, invocation, Args...>::value)
+		{
+			return task_result_type<FN, invocation, Args...>{};
+		}
+		else
+		{
+			return task_result_type<FN, Args...>{};
+		}
+	}
 
 	template <typename FN, typename... Args>
-	struct parallel_invocation_result_type<
-		FN, typename std::enable_if<std::is_invocable<FN, Args..., invocation>::value>::type, Args...>
+	struct parallel_invocation_result_type
 	{
-		using type = typename task_result_type<FN, invocation, Args...>::type;
+		using type = typename decltype(parallel_invocation_result_type_impl<FN, Args...>())::type;
 	};
 } // namespace ASYNC_NAMESPACE::details
 
@@ -594,8 +600,9 @@ namespace ASYNC_NAMESPACE
 		  public:
 			static constexpr const auto N{Count};
 			using value_type = FN;
-			template<typename Y>
+			template <typename Y>
 			constexpr repeat_task(Y&& y) noexcept : fn(std::forward<Y>(y)){};
+
 		  private:
 			template <typename T, typename F, size_t... S>
 			auto parallel_helper(F&& f, std::index_sequence<S...>)
@@ -651,7 +658,7 @@ namespace ASYNC_NAMESPACE
 			using value_type = FN;
 
 			template <typename Y>
-			constexpr repeat_task(Y&& y, size_t count) noexcept : fn(std::forward<Y>(y)), count(count) {};
+			constexpr repeat_task(Y&& y, size_t count) noexcept : fn(std::forward<Y>(y)), count(count){};
 
 			template <typename T, typename Scheduler, typename... Args>
 			auto operator()(T&& p, Scheduler& scheduler, Args&&... args)
