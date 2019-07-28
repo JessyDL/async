@@ -44,7 +44,7 @@ class async_scheduler
 			else
 				auto res =
 					std::async([](auto fn, auto p, auto... args) { p.set_value(fn(std::forward<Args>(args)...)); },
-						   std::forward<FN>(fn), std::forward<P>(p), std::forward<Args>(args)...);
+							   std::forward<FN>(fn), std::forward<P>(p), std::forward<Args>(args)...);
 		}
 	}
 };
@@ -106,7 +106,7 @@ void test_then1()
 void test_then2()
 {
 #ifdef TEST_THEN
-	auto task   = then([]() { return true; }, [](bool value) { return (value) ? 5 : 0; });
+	auto task = then([]() { return true; }, [](bool value) { return (value) ? 5 : 0; });
 	async_scheduler scheduler;
 	auto future = execute(scheduler, task);
 	auto result = future.get();
@@ -332,13 +332,13 @@ void test_parallel_n2()
 #endif
 }
 
-void test_parallel_n3() 
+void test_parallel_n3()
 {
-	auto seed	= []() { return 1; };
+	auto seed = []() { return 1; };
 
 	auto amplifier = parallel_n([](int seed) { return seed * 10; }, 10);
 
-	auto merge	 = [](std::vector<int> values) {
+	auto merge = [](std::vector<int> values) {
 		return std::accumulate(std::begin(values), std::end(values), 0, [](int sum, int value) { return sum + value; });
 	};
 
@@ -541,6 +541,29 @@ void complex_test3()
 #endif
 }
 
+void complex_test5()
+{
+	auto task1 = [](invocation invocation, int v2) -> int { return v2 * static_cast<int>(invocation.index); };
+	auto task2 = [](int value) { return value; };
+	auto merge = [](std::vector<int> values) {
+		return std::accumulate(std::begin(values), std::end(values), 0, [](int sum, int value) { return sum + value; });
+	};
+
+	auto chain = then(task1, task2);
+	auto para  = parallel_n(chain, 8);
+
+	auto task = then(para, merge);
+
+	auto result = compute(task, 10);
+
+	int expected = 0;
+	for(int i = 0; i < 8; ++i)
+	{
+		expected += 10 * i;
+	} 
+	assert(result == expected);
+}
+
 auto make_unique_task()
 {
 	std::unique_ptr<int> v{new int(100)};
@@ -594,5 +617,6 @@ int main()
 	complex_test2();
 	complex_test3();
 	complex_test4();
+	complex_test5();
 	return 0;
 }

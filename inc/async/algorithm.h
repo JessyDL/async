@@ -39,7 +39,7 @@ namespace ASYNC_NAMESPACE
 		struct task_result_type;
 
 		template <typename FN, typename... Args>
-		struct parallel_invocation_result_type;
+		struct repeat_task_invocation_result;
 
 		template <typename Task, typename Scheduler, typename... Args>
 		auto compute_unfold(Scheduler& scheduler, Task&& task, [[maybe_unused]] std::tuple<Args...>&& args);
@@ -331,7 +331,7 @@ namespace ASYNC_NAMESPACE::details
 		else if constexpr(is_repeat_task<task_t>::value)
 		{
 			using FN = typename task_t::value_type;
-			if constexpr(std::is_invocable<FN, invocation, Args...>::value)
+			if constexpr(is_task_invocable<FN, invocation, Args...>::value)
 			{
 				using result_t = typename decltype(_task_result_type_helper<FN, invocation, Args...>())::type;
 				if constexpr(std::is_same_v<result_t, void>)
@@ -379,18 +379,34 @@ namespace ASYNC_NAMESPACE::details
 	};
 
 	template <typename T, typename... Args>
-	struct is_invocable : std::is_invocable<T, Args...>
+	struct is_task_invocable_impl : std::is_invocable<T, Args...>
 	{};
 
 	template <typename FN1, typename FN2, typename... Args>
-	struct is_invocable<continuation<FN1, FN2>, Args...> : std::is_invocable<FN2, Args...>
+	struct is_task_invocable_impl<continuation<FN1, FN2>, Args...> : public is_task_invocable_impl<FN1, Args...>
 	{};
+
+	template <typename... FN, typename... Args>
+	struct is_task_invocable_impl<parallel_task<FN...>, Args...>
+		: public is_task_invocable_impl<std::tuple_element_t<0, std::tuple<FN...>>, Args...>
+	{};
+
+	template <typename FN, size_t N, typename... Args>
+	struct is_task_invocable_impl<repeat_task<FN, N>, Args...> : public is_task_invocable_impl<FN, Args...>
+	{};
+
+	template <typename T, typename... Args>
+	struct is_task_invocable : is_task_invocable_impl<remove_cvref_t<T>, Args...>
+	{};
+
+	template <typename T, typename... Args>
+	constexpr auto is_task_invocable_v = is_task_invocable<remove_cvref_t<T>, Args...>::value;
 
 
 	template <typename FN, typename... Args>
-	auto parallel_invocation_result_type_impl()
+	auto repeat_task_invocation_result_impl()
 	{
-		if constexpr(std::is_invocable<FN, invocation, Args...>::value)
+		if constexpr(is_task_invocable<FN, invocation, Args...>::value)
 		{
 			return task_result_type<FN, invocation, Args...>{};
 		}
@@ -401,9 +417,9 @@ namespace ASYNC_NAMESPACE::details
 	}
 
 	template <typename FN, typename... Args>
-	struct parallel_invocation_result_type
+	struct repeat_task_invocation_result
 	{
-		using type = typename decltype(parallel_invocation_result_type_impl<FN, Args...>())::type;
+		using type = typename decltype(repeat_task_invocation_result_impl<FN, Args...>())::type;
 	};
 } // namespace ASYNC_NAMESPACE::details
 
@@ -614,8 +630,8 @@ namespace ASYNC_NAMESPACE
 			template <typename T, typename Scheduler, typename... Args>
 			auto operator()(T&& p, Scheduler& scheduler, Args&&... args)
 			{
-				using result_t = typename details::parallel_invocation_result_type<FN, Args...>::type;
-				constexpr bool supports_invocation = std::is_invocable<FN, invocation, Args...>::value;
+				using result_t					   = typename details::repeat_task_invocation_result<FN, Args...>::type;
+				constexpr bool supports_invocation = is_task_invocable<FN, invocation, Args...>::value;
 
 				std::array<std::future<result_t>, Count> futures;
 				auto current_future = std::begin(futures);
@@ -663,8 +679,8 @@ namespace ASYNC_NAMESPACE
 			template <typename T, typename Scheduler, typename... Args>
 			auto operator()(T&& p, Scheduler& scheduler, Args&&... args)
 			{
-				using result_t = typename details::parallel_invocation_result_type<FN, Args...>::type;
-				constexpr bool supports_invocation = std::is_invocable<FN, invocation, Args...>::value;
+				using result_t					   = typename details::repeat_task_invocation_result<FN, Args...>::type;
+				constexpr bool supports_invocation = is_task_invocable<FN, invocation, Args...>::value;
 
 				std::vector<std::future<result_t>> futures;
 				for(auto i = 0u; i < count; ++i)
@@ -834,7 +850,7 @@ namespace ASYNC_NAMESPACE
 		{
 			if(std::get<0>(result))
 			{
-				if constexpr(details::is_invocable<FN1, T, Ts...>::value)
+				if constexpr(details::is_task_invocable<FN1, T, Ts...>::value)
 				{
 					return compute<execution::wait>(
 						std::forward<FN1>(fn1),
@@ -851,7 +867,7 @@ namespace ASYNC_NAMESPACE
 			}
 			else
 			{
-				if constexpr(details::is_invocable<FN2, T, Ts...>::value)
+				if constexpr(details::is_task_invocable<FN2, T, Ts...>::value)
 				{
 					return compute<execution::wait>(
 						std::forward<FN2>(fn2),
@@ -895,7 +911,7 @@ namespace ASYNC_NAMESPACE
 		{
 			if(value)
 			{
-				if constexpr(details::is_invocable<FN1, T, Ts...>::value)
+				if constexpr(details::is_task_invocable<FN1, T, Ts...>::value)
 				{
 					return compute<execution::wait>(std::forward<FN1>(fn1), std::forward<T>(value),
 													std::forward<Ts>(result)...);
@@ -907,7 +923,7 @@ namespace ASYNC_NAMESPACE
 			}
 			else
 			{
-				if constexpr(details::is_invocable<FN2, T, Ts...>::value)
+				if constexpr(details::is_task_invocable<FN2, T, Ts...>::value)
 				{
 					return compute<execution::wait>(std::forward<FN2>(fn2), std::forward<T>(value),
 													std::forward<Ts>(result)...);
